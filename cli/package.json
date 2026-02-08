@@ -1,0 +1,47 @@
+{
+  "name": "@bubbl/cli",
+  "version": "1.0.0",
+  "description": "Bubbl - AI coding assistant CLI",
+  "bin": {
+    "bubbl": "./dist/bubbl.js"
+  },
+  "main": "./dist/bubbl.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx bubbl.ts",
+    "start": "node dist/bubbl.js",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "dependencies": {
+    "tsx": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
+    "eslint": "^9.39.2",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "ai",
+    "coding",
+    "assistant",
+    "cli",
+    "llm",
+    "ollama",
+    "claude"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/bubbl"
+  },
+  "license": "MIT"
+}
