@@ -446,6 +446,7 @@ interface ModelInfo {
   vram?: string;
   speed?: string;
   capabilities?: string[];
+  installed?: boolean;
 }
 
 // Fallback models when API is unavailable
@@ -622,12 +623,42 @@ function formatApiError(status: number, errorText: string): string {
   const is500 = status >= 500;
   const isNextJsError = errorText.includes("missing required error components");
 
+  // Detect model not found/installed errors
+  const modelNotFound = errorText.includes("model") &&
+    (errorText.includes("not found") || errorText.includes("does not exist") ||
+     errorText.includes("pull") || errorText.includes("try pulling"));
+
+  // Detect LLM backend unreachable
+  const llmUnreachable = errorText.includes("LLM backend unreachable") ||
+    errorText.includes("ECONNREFUSED") || errorText.includes("connect ECONNREFUSED");
+
+  if (modelNotFound) {
+    return (
+      `${c.yellow}Model not installed:${c.reset} ${CONFIG.model}\n\n` +
+      `${c.dim}To install this model, run:${c.reset}\n` +
+      `  ${c.cyan}ollama pull ${CONFIG.model}${c.reset}\n\n` +
+      `${c.dim}Or switch to an installed model:${c.reset}\n` +
+      `  ${c.cyan}/models${c.reset} to see available models\n` +
+      `  ${c.cyan}/model <id>${c.reset} to switch\n`
+    );
+  }
+
+  if (llmUnreachable) {
+    return (
+      `${c.yellow}Ollama not running${c.reset}\n\n` +
+      `${c.dim}Start Ollama:${c.reset}\n` +
+      `  ${c.cyan}ollama serve${c.reset}\n\n` +
+      `${c.dim}Then ensure your model is installed:${c.reset}\n` +
+      `  ${c.cyan}ollama pull ${CONFIG.model}${c.reset}\n`
+    );
+  }
+
   if (isNextJsError) {
     return (
       `Server error - the Bubbl API is crashing.\n\n` +
       `${c.dim}Check the server terminal for stack traces. Common causes:\n` +
-      `• Ollama not running (for local models): run ${c.cyan}ollama serve${c.reset} and ${c.cyan}ollama pull qwen2.5:7b${c.reset}\n` +
-      `• Database/file permissions in the app directory\n` +
+      `• Ollama not running: ${c.cyan}ollama serve${c.reset}\n` +
+      `• Model not installed: ${c.cyan}ollama pull ${CONFIG.model}${c.reset}\n` +
       `• Missing env vars: copy ${c.cyan}app/.env.example${c.reset} to ${c.cyan}app/.env${c.reset}\n`
     );
   }
@@ -635,10 +666,9 @@ function formatApiError(status: number, errorText: string): string {
   if (is404 && isHtml) {
     return (
       `Server returned 404 - API route not found.\n\n` +
-      `${c.dim}The Bubbl server at ${CONFIG.apiUrl} may not be running, or BUBBL_API_URL might be wrong.\n\n` +
-      `1. Start the server: ${c.cyan}cd app && npm run dev${c.reset} (from the Bubbl project root)\n` +
-      `2. Or use: ${c.cyan}./run-server.sh${c.reset} from the project root\n` +
-      `3. Set BUBBL_API_URL if using a different host (default: http://localhost:3000)\n`
+      `${c.dim}The Bubbl server at ${CONFIG.apiUrl} may not be running.\n\n` +
+      `1. Start the server: ${c.cyan}cd app && npm run dev${c.reset}\n` +
+      `2. Or use: ${c.cyan}./run-server.sh${c.reset}\n`
     );
   }
 
@@ -649,14 +679,20 @@ function formatApiError(status: number, errorText: string): string {
   if (is500 && isHtml) {
     return (
       `Server error (${status}). Check the Bubbl server logs.\n` +
-      `${c.dim}Ensure Ollama is running (ollama serve) if using local models.${c.reset}`
+      `${c.dim}Ensure Ollama is running: ${c.cyan}ollama serve${c.reset}`
     );
   }
 
   // Try to parse JSON error
   try {
     const json = JSON.parse(errorText);
-    if (json.error) return json.error;
+    if (json.error) {
+      // Add helpful context for common errors
+      if (json.error.includes("timeout")) {
+        return `${json.error}\n${c.dim}Try a smaller model or enable speed mode: /speed${c.reset}`;
+      }
+      return json.error;
+    }
     if (json.details) return `${json.error || "Error"}: ${json.details}`;
   } catch {}
 
@@ -4480,7 +4516,7 @@ async function chatWithImage(prompt: string, imageDataUrl: string): Promise<void
         project_root: process.cwd(),
         agentic: false,
         max_tokens: CONFIG.speedMode ? 2048 : CONFIG.maxTokens,
-        temperature: CONFIG.speedMode ? 0.2 : 0.5, // Lower temp = more consistent, less questioning
+        temperature: CONFIG.speedMode ? 0.1 : 0.3, // Lower temp = more consistent, less questioning
       }),
       signal: currentAbortController.signal,
     });
@@ -4567,7 +4603,7 @@ async function chat(userInput: string): Promise<void> {
           instance_id: cliInstanceId,
           project_root: process.cwd(),
           agentic: false,
-          temperature: CONFIG.speedMode ? 0.2 : 0.5,
+          temperature: CONFIG.speedMode ? 0.1 : 0.3,
           max_tokens: CONFIG.speedMode ? 2048 : CONFIG.maxTokens,
         }),
         signal: currentAbortController.signal,
@@ -4665,10 +4701,24 @@ async function chat(userInput: string): Promise<void> {
       }
     } catch (error: any) {
       stopSpinner();
+      const elapsed = ((Date.now() - iterationStart) / 1000).toFixed(1);
+
       if (error.name === "AbortError") {
-        console.log(`${c.yellow}Request cancelled${c.reset}`);
+        if (parseFloat(elapsed) > 100) {
+          console.log(`${c.yellow}Request timed out${c.reset} after ${elapsed}s`);
+          console.log(`${c.dim}Tip: Enable speed mode with /speed${c.reset}`);
+        } else {
+          console.log(`${c.yellow}Cancelled${c.reset}`);
+        }
+      } else if (error.code === "ECONNREFUSED" || error.cause?.code === "ECONNREFUSED") {
+        console.log(`${c.red}Cannot connect${c.reset} to ${CONFIG.apiUrl}`);
+        console.log(`${c.dim}Start server: cd app && npm run dev${c.reset}`);
+      } else if (error.message?.includes("ECONNRESET")) {
+        console.log(`${c.yellow}Connection reset${c.reset}`);
+      } else if (error.message?.includes("fetch failed")) {
+        console.log(`${c.red}Network error${c.reset}`);
       } else {
-        console.log(`${c.red}Error: ${error.message}${c.reset}`);
+        console.log(`${c.red}Error:${c.reset} ${error.message}`);
       }
       continueLoop = false;
     } finally {
@@ -4677,7 +4727,8 @@ async function chat(userInput: string): Promise<void> {
   }
 
   if (iterations >= maxIterations) {
-    console.log(`\n${c.yellow}Reached max iterations (${maxIterations})${c.reset}`);
+    console.log(`\n${c.yellow}Max iterations reached${c.reset}`);
+    console.log(`${c.dim}Try rephrasing your request${c.reset}`);
   }
 }
 
@@ -4828,13 +4879,22 @@ ${c.dim}CWD:${c.reset}     ${process.cwd()}${projectType ? ` ${c.dim}(${projectT
   warmCache();
 
   // Check API connectivity - warn early if server unreachable
-  await checkApiConnectivity();
+  const apiOk = await checkApiConnectivity();
+  if (!apiOk) return;
 
-  // Check if model supports tool calling
-  if (!modelSupportsTools(CONFIG.model)) {
+  // Quick check if selected model is available
+  const models = await fetchAvailableModels();
+  const selectedModel = models.find((m: any) => m.id === CONFIG.model);
+  if (selectedModel && selectedModel.installed === false) {
+    console.log(`${c.yellow}⚠${c.reset} Model ${c.cyan}${CONFIG.model}${c.reset} is not installed locally`);
+    console.log(`${c.dim}  Install: ${c.cyan}ollama pull ${CONFIG.model}${c.reset}`);
+    const installed = models.filter((m: any) => m.installed);
+    if (installed.length > 0) {
+      console.log(`${c.dim}  Or switch: ${c.cyan}/model ${installed[0].id}${c.reset}\n`);
+    }
+  } else if (!modelSupportsTools(CONFIG.model)) {
     console.log(`${c.yellow}⚠${c.reset} Model ${c.cyan}${CONFIG.model}${c.reset} may not support tool calling.`);
-    console.log(`${c.dim}  For code editing, use: qwen2.5:7b, llama3.1:8b, mistral, etc.${c.reset}`);
-    console.log(`${c.dim}  Run /models to see all options${c.reset}\n`);
+    console.log(`${c.dim}  For code editing, use: qwen2.5:7b, llama3.1:8b, etc.${c.reset}\n`);
   }
 
   // Register CLI instance with API (shows in dashboard with model)
@@ -4884,24 +4944,44 @@ ${c.dim}CWD:${c.reset}     ${process.cwd()}${projectType ? ` ${c.dim}(${projectT
 
   // Handle Ctrl+C - cancel current request or exit
   let lastCtrlC = 0;
+  let rlClosed = false;
+
   process.on("SIGINT", () => {
+    // Prevent ERR_USE_AFTER_CLOSE by checking if readline is closed
+    if (rlClosed) {
+      process.exit(0);
+      return;
+    }
+
     if (currentAbortController) {
       cancelRequest();
-      rl.prompt();
+      if (!rlClosed) rl.prompt();
     } else {
       const now = Date.now();
       if (now - lastCtrlC < 500) {
         // Double Ctrl+C - save state and exit
+        rlClosed = true;
         if (messages.length > 1) {
           saveInterruptedSession(messages);
           console.log(`\n${c.dim}Session saved. Run 'bubbl --resume' to continue.${c.reset}`);
+        }
+        // Archive CLI instance on exit
+        if (cliInstanceId && CONFIG.apiKey) {
+          fetch(`${CONFIG.apiUrl}/api/instances?id=${cliInstanceId}`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${CONFIG.apiKey}`,
+            },
+            body: JSON.stringify({ status: "archived" }),
+          }).catch(() => {});
         }
         console.log(`${c.purple}Bye!${c.reset}`);
         process.exit(0);
       }
       lastCtrlC = now;
       console.log(`\n${c.dim}Press Ctrl+C again to exit (session will be saved)${c.reset}`);
-      rl.prompt();
+      if (!rlClosed) rl.prompt();
     }
   });
 
@@ -6121,9 +6201,23 @@ async function fetchData(url: string): Promise<Data> {
 
   rl.on("close", async () => {
     isClosing = true;
+    rlClosed = true;
     // Wait for any pending commands to complete before exiting
     while (hasPendingInput || isProcessingCommand || commandQueue.length > 0) {
       await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    // Archive CLI instance on exit
+    if (cliInstanceId && CONFIG.apiKey) {
+      try {
+        await fetch(`${CONFIG.apiUrl}/api/instances?id=${cliInstanceId}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${CONFIG.apiKey}`,
+          },
+          body: JSON.stringify({ status: "archived" }),
+        });
+      } catch {}
     }
     // Auto-save conversation if enabled and we have messages
     if (CONFIG.autoSave && messages.length > 1) {
