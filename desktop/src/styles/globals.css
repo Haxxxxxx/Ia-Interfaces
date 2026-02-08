@@ -1,0 +1,131 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --terminal-bg: #0D1117;
+  --terminal-surface: #161B22;
+  --terminal-border: #30363D;
+  --terminal-text: #C9D1D9;
+  --terminal-muted: #8B949E;
+  --terminal-accent: #58A6FF;
+  --terminal-green: #3FB950;
+  --terminal-red: #F85149;
+  --terminal-yellow: #D29922;
+  --terminal-purple: #BC8CFF;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'JetBrains Mono', monospace;
+  background: var(--terminal-bg);
+  color: var(--terminal-text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Disable drag on everything except specific elements */
+* {
+  -webkit-user-drag: none;
+}
+
+/* Enable text selection in chat */
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--terminal-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--terminal-muted);
+}
+
+/* Focus */
+:focus-visible {
+  outline: 2px solid var(--terminal-accent);
+  outline-offset: 2px;
+}
+
+/* Code */
+pre, code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+}
+
+/* Animations */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.cursor-blink {
+  animation: blink 1s step-end infinite;
+}
+
+.thinking-pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Status indicator */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.status-dot.connected {
+  background: var(--terminal-green);
+  box-shadow: 0 0 6px var(--terminal-green);
+}
+
+.status-dot.disconnected {
+  background: var(--terminal-red);
+}
+
+/* Titlebar drag region (macOS) */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}

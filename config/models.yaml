@@ -1,0 +1,62 @@
+# Sadary LLM Hub — Model Configuration
+
+models:
+  kimi-k2.5:
+    name: "Kimi K2.5"
+    description: "Flagship model — 1T params, 256K context, multimodal"
+    provider: "moonshot"
+    context_window: 256000
+    capabilities:
+      - chat
+      - code
+      - vision
+      - tool_calling
+      - thinking
+    pricing:
+      input_per_million: 0.60
+      output_per_million: 2.50
+      cached_per_million: 0.15
+    default: true
+
+  kimi-k2-0905:
+    name: "Kimi K2 (Fast)"
+    description: "Faster variant for quick interactions"
+    provider: "moonshot"
+    context_window: 128000
+    capabilities:
+      - chat
+      - code
+      - tool_calling
+    pricing:
+      input_per_million: 0.60
+      output_per_million: 2.50
+      cached_per_million: 0.15
+
+  kimi-k2-thinking:
+    name: "Kimi K2 Thinking"
+    description: "Optimized for deep reasoning and analysis"
+    provider: "moonshot"
+    context_window: 128000
+    capabilities:
+      - chat
+      - code
+      - thinking
+      - tool_calling
+    pricing:
+      input_per_million: 0.60
+      output_per_million: 2.50
+      cached_per_million: 0.15
+
+  kimi-k2-thinking-turbo:
+    name: "Kimi K2 Thinking Turbo"
+    description: "Fast reasoning with higher throughput"
+    provider: "moonshot"
+    context_window: 128000
+    capabilities:
+      - chat
+      - code
+      - thinking
+      - tool_calling
+    pricing:
+      input_per_million: 1.15
+      output_per_million: 8.00

@@ -1,0 +1,21 @@
+# Cloudflare Tunnel Configuration
+# Copy to /etc/cloudflared/config.yml on VPS
+
+# Replace <TUNNEL_ID> with your actual tunnel ID
+tunnel: <TUNNEL_ID>
+credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: llm.sadary.xyz
+    service: http://localhost:3000
+    originRequest:
+      connectTimeout: 10s
+      keepAliveTimeout: 120s
+      keepAliveConnections: 100
+      # Enable HTTP/2
+      http2Origin: true
+      # Disable chunked encoding for SSE
+      disableChunkedEncoding: true
+
+  # Catch-all
+  - service: http_status:404

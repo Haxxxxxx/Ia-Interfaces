@@ -1,0 +1,78 @@
+# Sadary LLM Hub — Self-Hosted Edition
+# Tokens: FREE | Pay only: GPU/VPS
+
+services:
+  # Ollama — Self-hosted LLM inference (FREE tokens!)
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # For CPU-only (slower): comment out the deploy section above
+
+  # API Server + Team Management
+  llm-hub:
+    build: ./app
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - LLM_PROVIDER=ollama
+      - OLLAMA_URL=http://ollama:11434/v1
+      - DATABASE_URL=file:/data/llmhub.db
+      - SESSION_SECRET=${SESSION_SECRET}
+      - NODE_ENV=production
+      # Optional: Moonshot API fallback
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY:-}
+    volumes:
+      - app-data:/data
+    depends_on:
+      - ollama
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Auto-update containers
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=86400
+
+volumes:
+  ollama-models:
+    driver: local
+  app-data:
+    driver: local
+
+# ===========================================
+# GPU Requirements for Models:
+# ===========================================
+# qwen2.5:72b    → 48GB VRAM (A100 80GB recommended)
+# llama3.3:70b   → 48GB VRAM (A100 80GB recommended)
+# qwen2.5:32b    → 24GB VRAM (A10, RTX 4090)
+# qwen2.5:7b     → 8GB VRAM (RTX 3070+)
+#
+# After starting, pull models:
+#   docker exec ollama ollama pull qwen2.5:72b
+#   docker exec ollama ollama pull llama3.3:70b
+# ===========================================

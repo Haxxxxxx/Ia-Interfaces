@@ -1,0 +1,144 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --terminal-bg: #0D1117;
+  --terminal-surface: #161B22;
+  --terminal-border: #30363D;
+  --terminal-text: #C9D1D9;
+  --terminal-muted: #8B949E;
+  --terminal-accent: #58A6FF;
+  --terminal-green: #3FB950;
+  --terminal-red: #F85149;
+  --terminal-yellow: #D29922;
+  --terminal-purple: #BC8CFF;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'JetBrains Mono', monospace;
+  background: var(--terminal-bg);
+  color: var(--terminal-text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--terminal-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--terminal-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--terminal-muted);
+}
+
+/* Selection */
+::selection {
+  background: var(--terminal-accent);
+  color: var(--terminal-bg);
+}
+
+/* Focus outline */
+:focus-visible {
+  outline: 2px solid var(--terminal-accent);
+  outline-offset: 2px;
+}
+
+/* Code blocks */
+pre, code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+}
+
+/* Terminal prompt style */
+.prompt::before {
+  content: '> ';
+  color: var(--terminal-green);
+}
+
+/* Cursor blink */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.cursor {
+  animation: blink 1s step-end infinite;
+}
+
+/* Thinking block animation */
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.thinking-pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Status indicator */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.connected {
+  background: var(--terminal-green);
+  box-shadow: 0 0 8px var(--terminal-green);
+}
+
+.status-dot.disconnected {
+  background: var(--terminal-red);
+}
+
+/* Button base */
+.btn {
+  @apply px-4 py-2 rounded font-medium transition-colors;
+  @apply focus:outline-none focus:ring-2 focus:ring-terminal-accent;
+}
+
+.btn-primary {
+  @apply bg-terminal-accent text-terminal-bg hover:bg-opacity-80;
+}
+
+.btn-secondary {
+  @apply bg-terminal-surface border border-terminal-border text-terminal-text;
+  @apply hover:bg-terminal-border;
+}
+
+/* Input base */
+.input {
+  @apply w-full px-3 py-2 rounded;
+  @apply bg-terminal-surface border border-terminal-border;
+  @apply text-terminal-text placeholder-terminal-muted;
+  @apply focus:outline-none focus:ring-2 focus:ring-terminal-accent focus:border-transparent;
+}
+
+/* Card */
+.card {
+  @apply bg-terminal-surface border border-terminal-border rounded-lg p-4;
+}
