@@ -138,7 +138,7 @@ else
     echo ""
     echo "4. Run setup script on Shadow VPS:"
     echo -e "   ${DIM}ssh user@${SHADOW_IP}${NC}"
-    echo -e "   ${DIM}curl -fsSL https://raw.githubusercontent.com/.../shadow-vps-setup.sh | bash${NC}"
+    echo -e "   ${DIM}curl -fsSL https://raw.githubusercontent.com/Haxxolotto/Ia-Interfaces/main/scripts/setup-ollama-vps.sh | bash${NC}"
     echo ""
     exit 1
 fi
