@@ -103,7 +103,7 @@ APP_DIR="/opt/llm-hub"
 if [ ! -d "$APP_DIR" ]; then
   mkdir -p "$APP_DIR"
   echo "Please clone your repo to $APP_DIR"
-  echo "  git clone https://github.com/YOUR_USERNAME/Ia-Interfaces.git $APP_DIR"
+  echo "  git clone https://github.com/Haxxolotto/Ia-Interfaces.git $APP_DIR"
 else
   echo "App directory exists at $APP_DIR"
 fi
@@ -159,7 +159,7 @@ echo ""
 echo -e "${GREEN}Next steps:${NC}"
 echo ""
 echo "1. Clone your repo (if not already done):"
-echo "   git clone https://github.com/YOUR_USERNAME/Ia-Interfaces.git $APP_DIR"
+echo "   git clone https://github.com/Haxxolotto/Ia-Interfaces.git $APP_DIR"
 echo ""
 echo "2. Configure the app:"
 echo "   cd $APP_DIR/app"

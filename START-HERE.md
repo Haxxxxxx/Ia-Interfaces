@@ -23,7 +23,7 @@ In Shadow PC → **PowerShell (Admin)**:
 ```powershell
 # Download and run setup
 Set-ExecutionPolicy Bypass -Scope Process -Force
-irm "https://raw.githubusercontent.com/YOUR_USERNAME/Ia-Interfaces/main/scripts/windows/setup-shadow-pc.ps1" | iex
+irm "https://raw.githubusercontent.com/Haxxolotto/Ia-Interfaces/main/scripts/windows/setup-shadow-pc.ps1" | iex
 ```
 
 This installs:

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rodeo - One-Line Install Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/your-repo/rodeo/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Haxxolotto/Ia-Interfaces/main/install.sh | bash
 
 set -e
 

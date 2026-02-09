@@ -4,7 +4,7 @@
 
 ```bash
 # One-liner install
-curl -fsSL https://raw.githubusercontent.com/your-repo/rodeo/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Haxxolotto/Ia-Interfaces/main/install.sh | bash
 ```
 
 Or manually:

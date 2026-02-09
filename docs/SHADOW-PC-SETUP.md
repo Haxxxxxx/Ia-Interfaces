@@ -39,7 +39,7 @@ Connect to Shadow PC and open **PowerShell as Administrator**:
 
 ```powershell
 # Download setup script
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/YOUR_USERNAME/Ia-Interfaces/main/scripts/windows/setup-shadow-pc.ps1" -OutFile "$env:TEMP\setup.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Haxxolotto/Ia-Interfaces/main/scripts/windows/setup-shadow-pc.ps1" -OutFile "$env:TEMP\setup.ps1"
 
 # Run setup
 Set-ExecutionPolicy Bypass -Scope Process -Force

@@ -59,7 +59,7 @@ if (Test-Path $appDir) {
     Set-Location $appDir
     git pull
 } else {
-    git clone https://github.com/YOUR_USERNAME/Ia-Interfaces.git $appDir
+    git clone https://github.com/Haxxolotto/Ia-Interfaces.git $appDir
 }
 
 Set-Location "$appDir\app"

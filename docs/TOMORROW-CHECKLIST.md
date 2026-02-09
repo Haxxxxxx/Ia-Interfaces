@@ -23,7 +23,7 @@ Open **PowerShell as Administrator** and run:
 
 ```powershell
 # Download and run setup
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/YOUR_USERNAME/Ia-Interfaces/main/scripts/windows/setup-shadow-pc.ps1" -OutFile "$env:TEMP\setup.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Haxxolotto/Ia-Interfaces/main/scripts/windows/setup-shadow-pc.ps1" -OutFile "$env:TEMP\setup.ps1"
 Set-ExecutionPolicy Bypass -Scope Process -Force
 & "$env:TEMP\setup.ps1"
 ```

@@ -11,7 +11,7 @@
 ssh root@YOUR_VPS_IP
 
 # 2. Run the setup script (installs Ollama + pulls models)
-curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/main/scripts/setup-ollama-vps.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Haxxolotto/Ia-Interfaces/main/scripts/setup-ollama-vps.sh | bash
 
 # 3. Verify Ollama is running
 curl http://localhost:11434/api/tags
@@ -75,7 +75,7 @@ apt update && apt upgrade -y
 apt install -y curl git htop
 
 # Clone the repo
-git clone https://github.com/YOUR_USERNAME/Ia-Interfaces.git /opt/llm-hub
+git clone https://github.com/Haxxolotto/Ia-Interfaces.git /opt/llm-hub
 cd /opt/llm-hub
 ```
 
