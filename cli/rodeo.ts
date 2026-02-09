@@ -7814,9 +7814,13 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
         break;
       }
 
-      // CRITICAL: Stop spinner completely and ensure readline is ready
+      // CRITICAL: Stop spinner completely and prevent it from restarting
       stopSpinner();
-      // Clear any remaining spinner output and add a newline
+      waitingForUserInput = true; // Set flag to prevent spinner restart
+      
+      // Clear any remaining spinner output
+      process.stdout.clearLine?.(0);
+      process.stdout.cursorTo?.(0);
       process.stdout.write("\n");
       
       // Display questions and wait for input
@@ -7825,12 +7829,14 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
       // Get the readline interface (must use globalRl if available)
       const rl = globalRl;
       if (!rl) {
+        waitingForUserInput = false; // Reset flag on error
         result = `${c.red}Error:${c.reset} Readline interface not available. Cannot ask user questions.`;
         break;
       }
       
-      // Pause the main readline handler to prevent conflicts
-      rl.pause();
+      // Store original prompt and temporarily disable it
+      const originalPrompt = rl.getPrompt();
+      rl.setPrompt("");
       
       try {
         for (const q of questions) {
@@ -7843,13 +7849,14 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
           }
           
           // Actually wait for user input using readline
-          // Use Promise to make it awaitable
+          // Use Promise to make it awaitable - this will block until user responds
           const answer = await new Promise<string>((resolve) => {
-            // Prompt for answer
+            // Prompt for answer - rl.question will handle input properly
             const promptText = q.options && q.options.length > 0
               ? `\n${c.cyan}Select option (1-${q.options.length}) or type your answer:${c.reset} `
               : `\n${c.cyan}Your answer:${c.reset} `;
             
+            // This will wait for user input - the Promise won't resolve until user types and presses Enter
             rl.question(promptText, (ans) => {
               resolve(ans.trim());
             });
@@ -7871,8 +7878,9 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
           }
         }
       } finally {
-        // Always resume readline after getting answers
-        rl.resume();
+        // Always restore readline prompt and reset flag after getting answers
+        rl.setPrompt(originalPrompt);
+        waitingForUserInput = false; // Allow spinner to restart
       }
       
       // Format answer for the agent
@@ -9080,8 +9088,14 @@ const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "
 let spinnerInterval: ReturnType<typeof setInterval> | null = null;
 let spinnerFrame = 0;
 let spinnerStartTime = 0;
+let waitingForUserInput = false; // Flag to prevent spinner restart during user input
 
 function startSpinner(message: string = "Thinking"): void {
+  // Don't start spinner if we're waiting for user input
+  if (waitingForUserInput) {
+    return;
+  }
+  
   spinnerStartTime = Date.now();
   spinnerFrame = 0;
   updateThinking("analyzing", message);
@@ -9094,6 +9108,10 @@ function startSpinner(message: string = "Thinking"): void {
   process.stdout.write(`\n${c.purple}${spinnerFrames[spinnerFrame]}${c.reset} ${c.dim}${displayMsg}...${c.reset}`);
 
   spinnerInterval = setInterval(() => {
+    // Don't update spinner if waiting for user input
+    if (waitingForUserInput) {
+      return;
+    }
     spinnerFrame = (spinnerFrame + 1) % spinnerFrames.length;
     const elapsed = ((Date.now() - spinnerStartTime) / 1000).toFixed(1);
     const ctx = getThinkingDisplay() || `${modelShort} is ${message.toLowerCase()}`;
