@@ -28,7 +28,7 @@ export default function TeamPage() {
   }, []);
 
   async function fetchTeam() {
-    const apiKey = localStorage.getItem("sadary-api-key");
+    const apiKey = localStorage.getItem("rodeo-api-key");
     if (!apiKey) {
       window.location.href = "/dashboard";
       return;
@@ -55,7 +55,7 @@ export default function TeamPage() {
 
   async function handleAddMember(e: React.FormEvent) {
     e.preventDefault();
-    const apiKey = localStorage.getItem("sadary-api-key");
+    const apiKey = localStorage.getItem("rodeo-api-key");
     if (!apiKey) return;
 
     const res = await fetch("/api/team", {
@@ -106,9 +106,20 @@ export default function TeamPage() {
     <div className="min-h-screen bg-terminal-bg">
       {/* Header */}
       <header className="border-b border-terminal-border px-6 py-4">
-        <div className="flex items-center gap-3">
-          <span className="text-2xl">⚡</span>
-          <h1 className="text-xl font-semibold">Sadary Hub</h1>
+        <div className="flex items-center justify-between">
+          <a href="/" className="flex items-center gap-3 hover-lift">
+            <svg className="w-6 h-6 text-terminal-accent" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="12" r="10" opacity="0.3"/>
+              <circle cx="12" cy="12" r="6"/>
+            </svg>
+            <span className="text-xl font-semibold text-terminal-accent">Rodeo</span>
+          </a>
+          <Link
+            href="/"
+            className="px-3 py-1.5 bg-terminal-accent text-terminal-bg rounded text-sm font-medium hover:bg-opacity-80 transition-colors"
+          >
+            Open Chat
+          </Link>
         </div>
       </header>
 
@@ -219,11 +230,11 @@ export default function TeamPage() {
           )}
 
           {/* Team List */}
-          <div className="space-y-3">
+          <div className="space-y-3 stagger-children">
             {team.map((member) => (
               <div
                 key={member.id}
-                className="bg-terminal-surface border border-terminal-border rounded-lg p-4 flex items-center justify-between"
+                className="bg-terminal-surface border border-terminal-border rounded-lg p-4 flex items-center justify-between card-hover hover-lift"
               >
                 <div>
                   <div className="flex items-center gap-3">

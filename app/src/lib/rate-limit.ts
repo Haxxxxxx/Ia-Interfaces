@@ -15,7 +15,7 @@ interface RateLimitConfig {
 
 const DEFAULT_CONFIG: RateLimitConfig = {
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 30, // 30 RPM default
+  maxRequests: parseInt(process.env.DEFAULT_RPM_LIMIT || "60"), // Read from env, default 60 RPM
 };
 
 export function checkRateLimit(
@@ -52,11 +52,11 @@ export function checkRateLimit(
 // Cleanup old entries periodically
 setInterval(() => {
   const now = Date.now();
-  for (const [key, entry] of limits.entries()) {
+  Array.from(limits.entries()).forEach(([key, entry]) => {
     if (now > entry.resetAt) {
       limits.delete(key);
     }
-  }
+  });
 }, 60 * 1000); // Every minute
 
 // Per-model rate limits (higher tier = more requests)
@@ -65,6 +65,9 @@ export const MODEL_RATE_LIMITS: Record<string, RateLimitConfig> = {
   "kimi-k2-0905": { windowMs: 60000, maxRequests: 100 },
   "kimi-k2-thinking": { windowMs: 60000, maxRequests: 30 },
   "kimi-k2-thinking-turbo": { windowMs: 60000, maxRequests: 20 },
+  "deepseek-chat": { windowMs: 60000, maxRequests: 60 },
+  "deepseek-reasoner": { windowMs: 60000, maxRequests: 30 },
+  "deepseek-coder": { windowMs: 60000, maxRequests: 60 },
 };
 
 export function getRateLimitForModel(model: string): RateLimitConfig {

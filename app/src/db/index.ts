@@ -22,7 +22,7 @@ sqlite.exec(`
     id TEXT PRIMARY KEY,
     user_id TEXT REFERENCES users(id),
     name TEXT NOT NULL,
-    model TEXT NOT NULL DEFAULT 'kimi-k2.5',
+    model TEXT NOT NULL DEFAULT 'qwen2.5:72b',
     system_prompt TEXT,
     thinking INTEGER DEFAULT 1,
     status TEXT DEFAULT 'active',
@@ -60,3 +60,8 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_instances_user ON instances(user_id);
   CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id);
 `);
+
+// Migration: add source column if missing
+try {
+  sqlite.exec(`ALTER TABLE instances ADD COLUMN source TEXT DEFAULT 'web'`);
+} catch {}

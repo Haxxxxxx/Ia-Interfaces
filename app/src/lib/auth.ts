@@ -1,19 +1,57 @@
-import { db } from "@/db";
-import { users, usageLogs } from "@/db/schema";
-import { eq, and, gte, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import bcrypt from "bcryptjs";
-import { calculateCost } from "./moonshot-client";
+import { calculateModelCost } from "./models";
+import {
+  getAllUsers,
+  getUserById,
+  getUserByEmail,
+  createUser as dbCreateUser,
+  createUsageLog,
+  getTotalUsage,
+} from "./db-provider";
+import type { User } from "@/db/schema";
+
+// Cache API key → user to avoid O(n) bcrypt scan on every request
+// TTL 5 min; concurrent requests with same key hit cache
+const API_KEY_CACHE = new Map<string, { user: User; expires: number }>();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+// Dev mode bypass - creates a fake dev user for local testing
+const DEV_USER: User = {
+  id: "dev-user-local",
+  name: "Dev User",
+  email: "dev@localhost",
+  role: "admin",
+  apiKey: "dev-key-local",
+  apiKeyHash: "",
+  monthlyBudget: 1000,
+  createdAt: new Date(),
+};
 
 export async function validateApiKey(apiKey: string | null | undefined) {
+  // DEV MODE: Skip auth in development when no key provided or "dev" key used
+  if (process.env.NODE_ENV === "development") {
+    if (!apiKey || apiKey === "dev" || apiKey === "development") {
+      return DEV_USER;
+    }
+  }
+
   if (!apiKey) return null;
 
-  // Find user by API key prefix (first 8 chars for lookup)
-  const prefix = apiKey.slice(0, 8);
-  const allUsers = await db.select().from(users).all();
+  const now = Date.now();
+  const cached = API_KEY_CACHE.get(apiKey);
+  if (cached && cached.expires > now) {
+    return cached.user;
+  }
+
+  const allUsers = await getAllUsers();
 
   for (const user of allUsers) {
+    // Skip users without apiKeyHash (e.g., users from other apps in shared Firestore)
+    if (!user.apiKeyHash) continue;
+
     if (await bcrypt.compare(apiKey, user.apiKeyHash)) {
+      API_KEY_CACHE.set(apiKey, { user, expires: now + CACHE_TTL_MS });
       return user;
     }
   }
@@ -21,14 +59,27 @@ export async function validateApiKey(apiKey: string | null | undefined) {
   return null;
 }
 
+export async function findUserByEmail(email: string) {
+  return getUserByEmail(email);
+}
+
+export async function findUserById(id: string) {
+  return getUserById(id);
+}
+
 export async function generateApiKey(name: string): Promise<{ key: string; hash: string }> {
-  const key = `sadary-${name.toLowerCase().replace(/\s/g, "-")}-${uuidv4().slice(0, 12)}`;
+  const key = `rodeo-${name.toLowerCase().replace(/\s/g, "-")}-${uuidv4().slice(0, 12)}`;
   const hash = await bcrypt.hash(key, 10);
   return { key, hash };
 }
 
 export async function checkBudget(userId: string) {
-  const user = await db.select().from(users).where(eq(users.id, userId)).get();
+  // Dev user has unlimited budget
+  if (userId === "dev-user-local") {
+    return { exceeded: false, used: 0, limit: 1000, remaining: 1000, percentUsed: 0 };
+  }
+
+  const user = await getUserById(userId);
   if (!user) return { exceeded: true, used: 0, limit: 0 };
 
   // Get current month usage
@@ -36,20 +87,7 @@ export async function checkBudget(userId: string) {
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
-  const usage = await db
-    .select({
-      total: sql<number>`SUM(cost_usd)`,
-    })
-    .from(usageLogs)
-    .where(
-      and(
-        eq(usageLogs.userId, userId),
-        gte(usageLogs.createdAt, startOfMonth)
-      )
-    )
-    .get();
-
-  const used = usage?.total || 0;
+  const used = await getTotalUsage(userId, startOfMonth);
   const limit = user.monthlyBudget || 20;
 
   return {
@@ -69,12 +107,17 @@ export async function logUsage(
   cachedTokens: number = 0,
   instanceId?: string
 ) {
-  const costUsd = calculateCost(model, inputTokens, outputTokens, cachedTokens);
+  // Skip logging for dev user (doesn't exist in DB)
+  if (userId === "dev-user-local") {
+    return calculateModelCost(model, inputTokens, outputTokens, cachedTokens);
+  }
 
-  await db.insert(usageLogs).values({
+  const costUsd = calculateModelCost(model, inputTokens, outputTokens, cachedTokens);
+
+  await createUsageLog({
     id: uuidv4(),
     userId,
-    instanceId,
+    instanceId: instanceId || null,
     model,
     inputTokens,
     outputTokens,
@@ -105,7 +148,7 @@ export async function createUser(
     createdAt: new Date(),
   };
 
-  await db.insert(users).values(user);
+  await dbCreateUser(user);
 
   return { ...user, fullApiKey: key };
 }

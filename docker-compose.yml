@@ -6,10 +6,19 @@ services:
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:11434:11434"
+    # Expose to docker network only (llm-hub connects via http://ollama:11434)
+    # For external access, uncomment: ports: ["127.0.0.1:11434:11434"]
+    expose:
+      - "11434"
     volumes:
       - ollama-models:/root/.ollama
+    environment:
+      # Concurrency: 2 parallel requests per model (no blocking)
+      - OLLAMA_NUM_PARALLEL=2
+      # Queue: 64 requests before 503
+      - OLLAMA_MAX_QUEUE=64
+      # Keep 2 models loaded (e.g. 7b + 72b)
+      - OLLAMA_MAX_LOADED_MODELS=2
     deploy:
       resources:
         reservations:
@@ -31,8 +40,9 @@ services:
       - DATABASE_URL=file:/data/llmhub.db
       - SESSION_SECRET=${SESSION_SECRET}
       - NODE_ENV=production
-      # Optional: Moonshot API fallback
+      - DEPLOYMENT_MODE=docker
       - MOONSHOT_API_KEY=${MOONSHOT_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
     volumes:
       - app-data:/data
     depends_on:

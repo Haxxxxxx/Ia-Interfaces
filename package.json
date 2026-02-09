@@ -1,0 +1,24 @@
+{
+  "name": "rodeo",
+  "version": "1.0.0",
+  "description": "Self-hosted AI coding assistant",
+  "scripts": {
+    "install": "./install.sh",
+    "server": "cd app && npm run dev",
+    "dev": "cd app && npm run dev",
+    "cli": "cd cli && npx tsx rodeo.ts",
+    "rodeo": "npm run server",
+    "setup": "./install.sh"
+  },
+  "keywords": [
+    "ai",
+    "coding",
+    "assistant",
+    "llm",
+    "ollama"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^10.0.0"
+  }
+}

@@ -1,0 +1,1 @@
+{"status":"degraded","timestamp":"2026-02-08T11:31:48.563Z","provider":"ollama","services":{"api":"ok","llm":"unreachable","database":"ok"},"backends":{"ollama":"unreachable","moonshot":"disabled","deepseek":"disabled"},"config":{"provider":"ollama","deploymentMode":"local","ollamaConnected":false,"moonshotEnabled":false,"selfHosted":false,"tokensAreFree":false}}

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Sadary LLM Hub",
-  description: "Team LLM interface powered by Kimi K2.5",
+  title: "Rodeo",
+  description: "Self-hosted AI coding assistant",
 };
 
 export default function RootLayout({

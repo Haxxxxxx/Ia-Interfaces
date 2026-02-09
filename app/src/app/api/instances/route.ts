@@ -1,8 +1,12 @@
 import { NextRequest } from "next/server";
 import { validateApiKey } from "@/lib/auth";
-import { db } from "@/db";
-import { instances } from "@/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import {
+  getInstancesByUserId,
+  getInstanceById,
+  createInstance,
+  updateInstance,
+  // deleteInstance - not used, instances are archived not deleted
+} from "@/lib/db-provider";
 import { v4 as uuidv4 } from "uuid";
 
 // GET /api/instances - List user's instances
@@ -13,14 +17,11 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const userInstances = await db
-    .select()
-    .from(instances)
-    .where(and(eq(instances.userId, user.id), eq(instances.status, "active")))
-    .orderBy(desc(instances.updatedAt))
-    .all();
+  const userInstances = await getInstancesByUserId(user.id);
+  // Filter to active only
+  const activeInstances = userInstances.filter((i) => i.status === "active");
 
-  return Response.json({ instances: userInstances });
+  return Response.json({ instances: activeInstances });
 }
 
 // POST /api/instances - Create instance
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { name, model = "kimi-k2.5", systemPrompt, thinking = true } = body;
+  const { name, model = "qwen2.5:7b", source = "web", systemPrompt, thinking = true } = body;
 
   if (!name) {
     return Response.json({ error: "Name is required" }, { status: 400 });
@@ -40,10 +41,11 @@ export async function POST(req: NextRequest) {
 
   const now = new Date();
   const instance = {
-    id: uuidv4(),
+    id: body.id || uuidv4(),
     userId: user.id,
     name,
     model,
+    source: source === "cli" ? "cli" : "web",
     systemPrompt: systemPrompt || null,
     thinking,
     status: "active",
@@ -51,7 +53,7 @@ export async function POST(req: NextRequest) {
     updatedAt: now,
   };
 
-  await db.insert(instances).values(instance);
+  await createInstance(instance);
 
   return Response.json({ instance }, { status: 201 });
 }
@@ -70,26 +72,25 @@ export async function PUT(req: NextRequest) {
     return Response.json({ error: "Instance ID required" }, { status: 400 });
   }
 
-  const body = await req.json();
-  const { name, model, systemPrompt, thinking, status } = body;
+  // Verify ownership
+  const existing = await getInstanceById(instanceId);
+  if (!existing || existing.userId !== user.id) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
 
-  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  const body = await req.json();
+  const { name, model, source, systemPrompt, thinking, status } = body;
+
+  const updates: Record<string, unknown> = {};
   if (name !== undefined) updates.name = name;
   if (model !== undefined) updates.model = model;
+  if (source !== undefined) updates.source = source === "cli" ? "cli" : "web";
   if (systemPrompt !== undefined) updates.systemPrompt = systemPrompt;
   if (thinking !== undefined) updates.thinking = thinking;
   if (status !== undefined) updates.status = status;
 
-  await db
-    .update(instances)
-    .set(updates)
-    .where(and(eq(instances.id, instanceId), eq(instances.userId, user.id)));
-
-  const updated = await db
-    .select()
-    .from(instances)
-    .where(eq(instances.id, instanceId))
-    .get();
+  await updateInstance(instanceId, updates);
+  const updated = await getInstanceById(instanceId);
 
   return Response.json({ instance: updated });
 }
@@ -108,10 +109,13 @@ export async function DELETE(req: NextRequest) {
     return Response.json({ error: "Instance ID required" }, { status: 400 });
   }
 
-  await db
-    .update(instances)
-    .set({ status: "archived", updatedAt: new Date() })
-    .where(and(eq(instances.id, instanceId), eq(instances.userId, user.id)));
+  // Verify ownership
+  const existing = await getInstanceById(instanceId);
+  if (!existing || existing.userId !== user.id) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+
+  await updateInstance(instanceId, { status: "archived" });
 
   return Response.json({ success: true });
 }

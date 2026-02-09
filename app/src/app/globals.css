@@ -5,16 +5,19 @@
 @tailwind utilities;
 
 :root {
-  --terminal-bg: #0D1117;
-  --terminal-surface: #161B22;
-  --terminal-border: #30363D;
-  --terminal-text: #C9D1D9;
-  --terminal-muted: #8B949E;
-  --terminal-accent: #58A6FF;
-  --terminal-green: #3FB950;
-  --terminal-red: #F85149;
-  --terminal-yellow: #D29922;
-  --terminal-purple: #BC8CFF;
+  --terminal-bg: #0D0D12;
+  --terminal-surface: #16161D;
+  --terminal-border: #2A2A3C;
+  --terminal-text: #E4E4ED;
+  --terminal-muted: #8B8BA3;
+  --terminal-accent: #F97316;
+  --terminal-accent-hover: #EA580C;
+  --terminal-green: #22C55E;
+  --terminal-red: #EF4444;
+  --terminal-yellow: #EAB308;
+  --terminal-purple: #A259FF;
+  --terminal-orange: #F97316;
+  --terminal-blue: #1ABCFE;
 }
 
 * {
@@ -141,4 +144,865 @@ pre, code {
 /* Card */
 .card {
   @apply bg-terminal-surface border border-terminal-border rounded-lg p-4;
+}
+
+/* Keyboard shortcut */
+.kbd {
+  @apply inline-block px-2 py-0.5 text-xs rounded;
+  @apply bg-terminal-surface border border-terminal-border;
+  @apply font-mono text-terminal-muted;
+}
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
+/* Fade in animation */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Slide up animation */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slideUp {
+  animation: slideUp 0.3s ease-out;
+}
+
+/* Slide in from left */
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slideInLeft {
+  animation: slideInLeft 0.3s ease-out;
+}
+
+/* Scale in animation */
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-scaleIn {
+  animation: scaleIn 0.2s ease-out;
+}
+
+/* Bounce animation for buttons */
+@keyframes bounce {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(0.95); }
+}
+
+.animate-bounce-click:active {
+  animation: bounce 0.15s ease-out;
+}
+
+/* Glow pulse for active elements */
+@keyframes glowPulse {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(249, 115, 22, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(249, 115, 22, 0.6);
+  }
+}
+
+.animate-glow {
+  animation: glowPulse 2s ease-in-out infinite;
+}
+
+/* Typing indicator */
+@keyframes typingDot {
+  0%, 60%, 100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+}
+
+.typing-dot {
+  animation: typingDot 1.4s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* Shimmer loading effect */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--terminal-surface) 25%,
+    var(--terminal-border) 50%,
+    var(--terminal-surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Spinner */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Float animation for icons */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Stagger children animations */
+.stagger-children > * {
+  opacity: 0;
+  animation: slideUp 0.3s ease-out forwards;
+}
+
+.stagger-children > *:nth-child(1) { animation-delay: 0.05s; }
+.stagger-children > *:nth-child(2) { animation-delay: 0.1s; }
+.stagger-children > *:nth-child(3) { animation-delay: 0.15s; }
+.stagger-children > *:nth-child(4) { animation-delay: 0.2s; }
+.stagger-children > *:nth-child(5) { animation-delay: 0.25s; }
+.stagger-children > *:nth-child(6) { animation-delay: 0.3s; }
+.stagger-children > *:nth-child(7) { animation-delay: 0.35s; }
+.stagger-children > *:nth-child(8) { animation-delay: 0.4s; }
+
+/* ============================================
+   TRANSITIONS
+   ============================================ */
+
+/* Smooth hover transitions */
+.hover-lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Card hover effect */
+.card-hover {
+  transition: all 0.2s ease;
+  border-color: var(--terminal-border);
+}
+
+.card-hover:hover {
+  border-color: var(--terminal-accent);
+  box-shadow: 0 0 0 1px var(--terminal-accent);
+}
+
+/* Button hover glow */
+.btn-glow {
+  transition: all 0.2s ease;
+}
+
+.btn-glow:hover {
+  box-shadow: 0 0 20px rgba(249, 115, 22, 0.4);
+}
+
+/* Link underline animation */
+.link-animate {
+  position: relative;
+}
+
+.link-animate::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background: var(--terminal-accent);
+  transition: width 0.2s ease;
+}
+
+.link-animate:hover::after {
+  width: 100%;
+}
+
+/* ============================================
+   COMPONENTS
+   ============================================ */
+
+/* Message bubble */
+.message-bubble {
+  @apply rounded-lg p-4 max-w-[80%];
+  animation: slideUp 0.3s ease-out;
+}
+
+.message-bubble.user {
+  @apply bg-terminal-accent/20 ml-auto;
+}
+
+.message-bubble.assistant {
+  @apply bg-terminal-surface border border-terminal-border;
+}
+
+/* Progress bar */
+.progress-bar {
+  @apply h-2 bg-terminal-bg rounded-full overflow-hidden;
+}
+
+.progress-bar-fill {
+  @apply h-full bg-terminal-accent rounded-full;
+  transition: width 0.5s ease-out;
+}
+
+/* Toast notification */
+.toast {
+  animation: slideUp 0.3s ease-out;
+}
+
+/* Modal backdrop */
+.modal-backdrop {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.modal-content {
+  animation: scaleIn 0.2s ease-out;
+}
+
+/* Tab indicator */
+.tab-indicator {
+  transition: all 0.2s ease;
+}
+
+/* Tooltip */
+.tooltip {
+  @apply absolute px-2 py-1 text-xs rounded bg-terminal-surface border border-terminal-border;
+  @apply opacity-0 pointer-events-none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  transform: translateY(4px);
+}
+
+.tooltip-trigger:hover .tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Avatar ring */
+.avatar-ring {
+  @apply rounded-full p-0.5;
+  background: linear-gradient(135deg, var(--terminal-accent), #FBBF24);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, var(--terminal-accent), #FBBF24);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glass effect */
+.glass {
+  background: rgba(22, 22, 29, 0.8);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* ============================================
+   ENHANCED ANIMATIONS - Rodeo UI
+   ============================================ */
+
+/* Message appear animation with elastic effect */
+@keyframes messageAppear {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  50% {
+    transform: translateY(-3px) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-messageAppear {
+  animation: messageAppear 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Streaming text cursor */
+@keyframes streamCursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.stream-cursor::after {
+  content: '▊';
+  color: var(--terminal-accent);
+  animation: streamCursor 0.8s ease-in-out infinite;
+  margin-left: 2px;
+}
+
+/* Tool execution animation */
+@keyframes toolExec {
+  0% {
+    opacity: 0;
+    transform: translateX(-10px);
+    border-left-color: transparent;
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+    border-left-color: var(--terminal-yellow);
+  }
+}
+
+.tool-call {
+  animation: toolExec 0.3s ease-out;
+  border-left: 3px solid var(--terminal-yellow);
+  padding-left: 12px;
+}
+
+.tool-call.running {
+  animation: toolExec 0.3s ease-out, glowPulse 1.5s ease-in-out infinite;
+}
+
+.tool-call.done {
+  border-left-color: var(--terminal-green);
+}
+
+.tool-call.error {
+  border-left-color: var(--terminal-red);
+}
+
+/* Thinking/reasoning block */
+@keyframes thinkingExpand {
+  0% {
+    opacity: 0;
+    max-height: 0;
+    padding: 0;
+  }
+  100% {
+    opacity: 1;
+    max-height: 500px;
+    padding: 12px;
+  }
+}
+
+.thinking-block {
+  animation: thinkingExpand 0.4s ease-out;
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.1), rgba(251, 191, 36, 0.05));
+  border: 1px solid rgba(249, 115, 22, 0.3);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Code block syntax animation */
+@keyframes codeHighlight {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}
+
+.code-streaming {
+  background: linear-gradient(90deg,
+    var(--terminal-surface) 0%,
+    rgba(249, 115, 22, 0.1) 50%,
+    var(--terminal-surface) 100%
+  );
+  background-size: 200% 100%;
+  animation: codeHighlight 2s linear infinite;
+}
+
+/* Avatar pulse for active agent */
+@keyframes avatarPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(249, 115, 22, 0);
+  }
+}
+
+.avatar-active {
+  animation: avatarPulse 2s ease-in-out infinite;
+}
+
+/* Sidebar item hover */
+.sidebar-item {
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.sidebar-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0;
+  background: var(--terminal-accent);
+  transition: width 0.2s ease;
+  border-radius: 0 4px 4px 0;
+}
+
+.sidebar-item:hover::before {
+  width: 3px;
+}
+
+.sidebar-item.active::before {
+  width: 3px;
+  background: var(--terminal-accent);
+}
+
+/* Send button ripple effect */
+@keyframes sendRipple {
+  0% {
+    transform: scale(0);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.btn-send {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-send::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, white 10%, transparent 10%);
+  transform: scale(0);
+  opacity: 0;
+}
+
+.btn-send:active::after {
+  animation: sendRipple 0.4s ease-out;
+}
+
+/* Image generation progress */
+@keyframes imageGen {
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}
+
+.image-generating {
+  background: linear-gradient(-45deg,
+    var(--terminal-surface),
+    rgba(249, 115, 22, 0.2),
+    rgba(251, 191, 36, 0.2),
+    var(--terminal-surface)
+  );
+  background-size: 400% 400%;
+  animation: imageGen 3s ease infinite;
+  border-radius: 12px;
+}
+
+/* Model badge animations */
+.model-badge {
+  transition: all 0.2s ease;
+}
+
+.model-badge:hover {
+  transform: scale(1.05);
+}
+
+.model-badge.local {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(34, 197, 94, 0.1));
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.model-badge.api {
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.2), rgba(249, 115, 22, 0.1));
+  border: 1px solid rgba(249, 115, 22, 0.3);
+}
+
+/* Input focus animation */
+.input-enhanced {
+  transition: all 0.2s ease;
+  border: 1px solid var(--terminal-border);
+}
+
+.input-enhanced:focus {
+  border-color: var(--terminal-accent);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1), 0 0 20px rgba(249, 115, 22, 0.1);
+}
+
+/* Welcome screen animation */
+@keyframes welcomeFloat {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-10px) rotate(2deg);
+  }
+  75% {
+    transform: translateY(-5px) rotate(-2deg);
+  }
+}
+
+.welcome-icon {
+  animation: welcomeFloat 4s ease-in-out infinite;
+}
+
+/* Particle background effect */
+@keyframes particleFloat {
+  0%, 100% {
+    transform: translateY(0) translateX(0);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translateY(-20px) translateX(10px);
+    opacity: 0.6;
+  }
+}
+
+.particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: var(--terminal-accent);
+  border-radius: 50%;
+  animation: particleFloat 5s ease-in-out infinite;
+}
+
+/* Notification badge bounce */
+@keyframes badgeBounce {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+.notification-badge {
+  animation: badgeBounce 0.3s ease-out;
+}
+
+/* Collapse/expand animation */
+@keyframes collapseIn {
+  from {
+    opacity: 1;
+    width: 256px;
+  }
+  to {
+    opacity: 0;
+    width: 0;
+  }
+}
+
+@keyframes expandOut {
+  from {
+    opacity: 0;
+    width: 0;
+  }
+  to {
+    opacity: 1;
+    width: 256px;
+  }
+}
+
+/* Smooth number counter */
+.counter {
+  transition: all 0.3s ease-out;
+}
+
+/* Status indicator with glow */
+.status-connected {
+  background: var(--terminal-green);
+  box-shadow: 0 0 10px var(--terminal-green), 0 0 20px rgba(34, 197, 94, 0.3);
+}
+
+.status-disconnected {
+  background: var(--terminal-red);
+  box-shadow: 0 0 10px var(--terminal-red), 0 0 20px rgba(239, 68, 68, 0.3);
+}
+
+/* Skeleton loading */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--terminal-surface) 25%,
+    var(--terminal-border) 50%,
+    var(--terminal-surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.skeleton-text {
+  height: 1em;
+  margin-bottom: 0.5em;
+}
+
+.skeleton-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+/* Copy button feedback */
+@keyframes copySuccess {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.copy-success {
+  animation: copySuccess 0.3s ease-out;
+  color: var(--terminal-green) !important;
+}
+
+/* ============================================
+   FIGMA INTEGRATION STYLES
+   ============================================ */
+
+/* Figma gradient backgrounds */
+.figma-gradient {
+  background: linear-gradient(135deg, #F24E1E 0%, #A259FF 50%, #1ABCFE 100%);
+}
+
+.figma-gradient-subtle {
+  background: linear-gradient(135deg, rgba(242, 78, 30, 0.1) 0%, rgba(162, 89, 255, 0.1) 50%, rgba(26, 188, 254, 0.1) 100%);
+}
+
+/* Figma layer tree styles */
+.figma-layer-item {
+  @apply transition-all duration-150;
+  border-left: 2px solid transparent;
+}
+
+.figma-layer-item:hover {
+  @apply bg-terminal-surface/50;
+}
+
+.figma-layer-item.selected {
+  @apply bg-terminal-accent/10;
+  border-left-color: var(--terminal-accent);
+}
+
+/* Figma node type indicators */
+.figma-node-frame { color: #4E9AF1; }
+.figma-node-component { color: #A259FF; }
+.figma-node-instance { color: #22C55E; }
+.figma-node-vector { color: #F97316; }
+.figma-node-text { color: #E4E4ED; }
+.figma-node-group { color: #8B8BA3; }
+
+/* Layer tree expand/collapse animation */
+@keyframes layerExpand {
+  from {
+    opacity: 0;
+    height: 0;
+  }
+  to {
+    opacity: 1;
+    height: auto;
+  }
+}
+
+.layer-children {
+  animation: layerExpand 0.2s ease-out;
+  overflow: hidden;
+}
+
+/* Figma properties panel */
+.figma-property {
+  @apply flex items-center justify-between py-1.5 px-2;
+  @apply bg-terminal-bg rounded;
+  @apply transition-colors duration-150;
+}
+
+.figma-property:hover {
+  @apply bg-terminal-surface;
+}
+
+/* Color swatch */
+.color-swatch {
+  @apply w-5 h-5 rounded border border-terminal-border;
+  @apply shadow-sm;
+  background-image:
+    linear-gradient(45deg, #ccc 25%, transparent 25%),
+    linear-gradient(-45deg, #ccc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #ccc 75%),
+    linear-gradient(-45deg, transparent 75%, #ccc 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0px;
+}
+
+.color-swatch-inner {
+  @apply w-full h-full rounded;
+}
+
+/* Code tab styles */
+.figma-code-tab {
+  @apply flex-1 px-2 py-2 text-xs font-medium transition-all;
+  @apply text-terminal-muted hover:text-terminal-text hover:bg-terminal-bg/50;
+}
+
+.figma-code-tab.active {
+  @apply bg-terminal-bg text-terminal-accent border-b-2 border-terminal-accent;
+}
+
+/* Figma export buttons */
+.figma-export-btn {
+  @apply flex flex-col items-center gap-1 px-2 py-2 text-xs;
+  @apply bg-terminal-bg border border-terminal-border rounded-lg;
+  @apply transition-all duration-150;
+}
+
+.figma-export-btn:hover {
+  @apply border-terminal-accent bg-terminal-accent/5;
+  transform: translateY(-1px);
+}
+
+.figma-export-btn:active {
+  transform: translateY(0);
+}
+
+/* Figma file header */
+.figma-file-header {
+  background: linear-gradient(to right, var(--terminal-surface), var(--terminal-bg));
+}
+
+/* Loading states for Figma */
+@keyframes figmaLoading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.figma-loading {
+  background: linear-gradient(
+    90deg,
+    var(--terminal-bg) 0%,
+    rgba(162, 89, 255, 0.1) 25%,
+    rgba(26, 188, 254, 0.1) 50%,
+    rgba(242, 78, 30, 0.1) 75%,
+    var(--terminal-bg) 100%
+  );
+  background-size: 400% 100%;
+  animation: figmaLoading 2s linear infinite;
+}
+
+/* Thin scrollbar for Figma panels */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--terminal-border);
+  border-radius: 3px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: var(--terminal-muted);
+}
+
+/* Figma connect modal animation */
+@keyframes figmaModalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.figma-modal {
+  animation: figmaModalIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Figma icon animations */
+@keyframes figmaIconPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.figma-icon-pulse {
+  animation: figmaIconPulse 2s ease-in-out infinite;
+}
+
+/* Preview image hover */
+.figma-preview {
+  @apply relative overflow-hidden rounded-lg border border-terminal-border;
+  @apply transition-all duration-200;
+}
+
+.figma-preview:hover {
+  @apply border-terminal-accent;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.figma-preview img {
+  @apply transition-transform duration-200;
+}
+
+.figma-preview:hover img {
+  transform: scale(1.02);
 }

@@ -1,0 +1,14 @@
+{
+  "hosting": {
+    "site": "3rd-llm",
+    "source": "app",
+    "frameworksBackend": {
+      "region": "europe-west1"
+    },
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ]
+  }
+}

@@ -1,21 +1,29 @@
 {
-  "name": "@bubbl/cli",
+  "name": "@rodeo/cli",
   "version": "1.0.0",
-  "description": "Bubbl - AI coding assistant CLI",
+  "description": "Rodeo - AI coding assistant CLI with Shadow cloud GPU support",
   "bin": {
-    "bubbl": "./dist/bubbl.js"
+    "rodeo": "./dist/rodeo.js",
+    "rodeo-shadow-setup": "./scripts/shadow-vps-setup.sh",
+    "rodeo-connect": "./scripts/connect-shadow.sh",
+    "rodeo-models": "./scripts/install-models.sh"
   },
-  "main": "./dist/bubbl.js",
+  "main": "./dist/rodeo.js",
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx bubbl.ts",
-    "start": "node dist/bubbl.js",
+    "dev": "tsx rodeo.ts",
+    "start": "node dist/rodeo.js",
+    "shadow:setup": "./scripts/shadow-vps-setup.sh",
+    "shadow:connect": "./scripts/connect-shadow.sh",
+    "models:install": "./scripts/install-models.sh",
     "prepublishOnly": "npm run build"
   },
   "files": [
     "dist",
-    "README.md"
+    "scripts",
+    "README.md",
+    "SHADOW-SETUP.md"
   ],
   "dependencies": {
     "tsx": "^4.7.0"
@@ -37,11 +45,16 @@
     "cli",
     "llm",
     "ollama",
-    "claude"
+    "claude",
+    "gpu",
+    "shadow",
+    "cloud",
+    "nvidia",
+    "cuda"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/bubbl"
+    "url": "https://github.com/your-org/rodeo"
   },
   "license": "MIT"
 }

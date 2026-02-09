@@ -15,7 +15,8 @@ export const instances = sqliteTable("instances", {
   id: text("id").primaryKey(),
   userId: text("user_id").references(() => users.id),
   name: text("name").notNull(),
-  model: text("model").notNull().default("kimi-k2.5"),
+  model: text("model").notNull().default("qwen2.5:72b"),
+  source: text("source").default("web"), // web | cli
   systemPrompt: text("system_prompt"),
   thinking: integer("thinking", { mode: "boolean" }).default(true),
   status: text("status").default("active"), // active | archived

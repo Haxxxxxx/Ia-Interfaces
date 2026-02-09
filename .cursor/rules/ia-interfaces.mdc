@@ -1,0 +1,28 @@
+---
+description: Rodeo/Sadary LLM Hub — architecture, data flow, and conventions
+alwaysApply: true
+---
+
+# Ia-Interfaces / Rodeo Conventions
+
+## Architecture
+- **API**: Next.js App Router in `app/src/app/api/`
+- **LLM routing**: `kimi-*` → Moonshot, `deepseek-*` → DeepSeek, else → Ollama (see `lib/llm-client.ts`)
+- **Models**: Single source in `lib/models.ts`
+
+## Data Flow
+1. Auth via `validateApiKey()` from `lib/auth.ts`
+2. Parse body, route to LLM, stream response
+3. Log usage async; never block streaming
+
+## Key Rules
+- Use `lib/config.ts` for env (OLLAMA_URL, etc.), not raw `process.env` in business logic
+- Add models in `lib/models.ts` only
+- Keep API routes thin; put logic in `lib/`
+- VPS: `OLLAMA_URL=http://ollama:11434/v1` (Docker internal)
+- GPU models: qwen2.5:72b, llama3.3:70b need 48GB VRAM
+
+## Files
+- `AGENTS.md` — full agent guide
+- `docs/ARCHITECTURE.md` — diagrams
+- `docs/VPS-SETUP.md` — deployment

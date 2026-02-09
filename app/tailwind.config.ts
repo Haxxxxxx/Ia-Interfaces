@@ -10,16 +10,18 @@ const config: Config = {
     extend: {
       colors: {
         terminal: {
-          bg: "#0D1117",
-          surface: "#161B22",
-          border: "#30363D",
-          text: "#C9D1D9",
-          muted: "#8B949E",
-          accent: "#58A6FF",
-          green: "#3FB950",
-          red: "#F85149",
-          yellow: "#D29922",
-          purple: "#BC8CFF",
+          bg: "#0D0D12",
+          surface: "#16161D",
+          border: "#2A2A3C",
+          text: "#E4E4ED",
+          muted: "#8B8BA3",
+          accent: "#F97316",
+          green: "#22C55E",
+          red: "#EF4444",
+          yellow: "#EAB308",
+          purple: "#A259FF",
+          orange: "#F97316",
+          blue: "#1ABCFE",
         },
       },
       fontFamily: {

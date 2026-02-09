@@ -37,7 +37,7 @@ export default function UsagePage() {
   }, []);
 
   async function fetchUsage() {
-    const apiKey = localStorage.getItem("sadary-api-key");
+    const apiKey = localStorage.getItem("rodeo-api-key");
     if (!apiKey) {
       window.location.href = "/dashboard";
       return;
@@ -74,16 +74,26 @@ export default function UsagePage() {
     (sum, d) => sum + d.inputTokens + d.outputTokens,
     0
   );
-  const totalCached = data.daily.reduce((sum, d) => sum + (d.cachedTokens || 0), 0);
-  const cacheRate = totalTokens > 0 ? (totalCached / totalTokens) * 100 : 0;
+  const totalRequests = data.daily.reduce((sum, d) => sum + d.requests, 0);
 
   return (
     <div className="min-h-screen bg-terminal-bg">
       {/* Header */}
       <header className="border-b border-terminal-border px-6 py-4">
-        <div className="flex items-center gap-3">
-          <span className="text-2xl">⚡</span>
-          <h1 className="text-xl font-semibold">Sadary Hub</h1>
+        <div className="flex items-center justify-between">
+          <a href="/" className="flex items-center gap-3 hover-lift">
+            <svg className="w-6 h-6 text-terminal-accent" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="12" r="10" opacity="0.3"/>
+              <circle cx="12" cy="12" r="6"/>
+            </svg>
+            <span className="text-xl font-semibold text-terminal-accent">Rodeo</span>
+          </a>
+          <Link
+            href="/"
+            className="px-3 py-1.5 bg-terminal-accent text-terminal-bg rounded text-sm font-medium hover:bg-opacity-80 transition-colors"
+          >
+            Open Chat
+          </Link>
         </div>
       </header>
 
@@ -109,108 +119,115 @@ export default function UsagePage() {
       <main className="p-6">
         <div className="max-w-6xl mx-auto">
           {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-terminal-surface border border-terminal-border rounded-lg p-4">
-              <div className="text-sm text-terminal-muted">Total Cost</div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 stagger-children">
+            <div className="bg-terminal-surface border border-terminal-border rounded-lg p-4 card-hover hover-lift">
+              <div className="text-sm text-terminal-muted">Total Requests</div>
               <div className="text-2xl font-bold text-terminal-accent">
-                ${data.budget.used.toFixed(2)}
+                {totalRequests}
               </div>
             </div>
-            <div className="bg-terminal-surface border border-terminal-border rounded-lg p-4">
-              <div className="text-sm text-terminal-muted">Budget Remaining</div>
-              <div className="text-2xl font-bold text-terminal-green">
-                ${data.budget.remaining.toFixed(2)}
-              </div>
-            </div>
-            <div className="bg-terminal-surface border border-terminal-border rounded-lg p-4">
+            <div className="bg-terminal-surface border border-terminal-border rounded-lg p-4 card-hover hover-lift">
               <div className="text-sm text-terminal-muted">Total Tokens</div>
               <div className="text-2xl font-bold">
                 {(totalTokens / 1000).toFixed(0)}K
               </div>
             </div>
-            <div className="bg-terminal-surface border border-terminal-border rounded-lg p-4">
-              <div className="text-sm text-terminal-muted">Cache Hit Rate</div>
-              <div className="text-2xl font-bold text-terminal-purple">
-                {cacheRate.toFixed(0)}%
+            <div className="bg-terminal-surface border border-terminal-border rounded-lg p-4 card-hover hover-lift">
+              <div className="text-sm text-terminal-muted">Token Cost</div>
+              <div className="text-2xl font-bold text-terminal-green">
+                $0.00
               </div>
+              <div className="text-xs text-terminal-muted">Self-hosted = FREE</div>
+            </div>
+            <div className="bg-terminal-surface border border-terminal-border rounded-lg p-4 card-hover hover-lift">
+              <div className="text-sm text-terminal-muted">GPU Hours</div>
+              <div className="text-2xl font-bold text-terminal-purple">
+                ~{(totalTokens / 50000).toFixed(1)}h
+              </div>
+              <div className="text-xs text-terminal-muted">Estimated</div>
             </div>
           </div>
 
           {/* Model Breakdown */}
           <div className="bg-terminal-surface border border-terminal-border rounded-lg p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">Usage by Model</h2>
-            <div className="space-y-4">
-              {data.byModel.map((model) => {
-                const percentage =
-                  data.budget.used > 0
-                    ? (model.costUsd / data.budget.used) * 100
-                    : 0;
-                return (
-                  <div key={model.model}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium">{model.model}</span>
-                      <span className="text-terminal-muted">
-                        ${model.costUsd.toFixed(2)} ({model.requests} requests)
-                      </span>
+            {data.byModel.length === 0 ? (
+              <p className="text-terminal-muted">No usage data yet</p>
+            ) : (
+              <div className="space-y-4">
+                {data.byModel.map((model) => {
+                  const modelTokens = model.inputTokens + model.outputTokens;
+                  const percentage = totalTokens > 0 ? (modelTokens / totalTokens) * 100 : 0;
+                  return (
+                    <div key={model.model}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium">{model.model}</span>
+                        <span className="text-terminal-muted">
+                          {(modelTokens / 1000).toFixed(0)}K tokens ({model.requests} requests)
+                        </span>
+                      </div>
+                      <div className="h-2 bg-terminal-bg rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-terminal-accent rounded-full"
+                          style={{ width: `${Math.max(2, percentage)}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="h-2 bg-terminal-bg rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-terminal-accent rounded-full"
-                        style={{ width: `${percentage}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Daily Breakdown */}
           <div className="bg-terminal-surface border border-terminal-border rounded-lg p-6">
             <h2 className="text-lg font-semibold mb-4">Daily Breakdown</h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-terminal-muted border-b border-terminal-border">
-                    <th className="text-left py-2">Date</th>
-                    <th className="text-right py-2">Requests</th>
-                    <th className="text-right py-2">Input</th>
-                    <th className="text-right py-2">Output</th>
-                    <th className="text-right py-2">Cached</th>
-                    <th className="text-right py-2">Cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.daily.map((day) => (
-                    <tr key={day.date} className="border-b border-terminal-border/50">
-                      <td className="py-2">{day.date}</td>
-                      <td className="text-right py-2">{day.requests}</td>
-                      <td className="text-right py-2">
-                        {(day.inputTokens / 1000).toFixed(1)}K
-                      </td>
-                      <td className="text-right py-2">
-                        {(day.outputTokens / 1000).toFixed(1)}K
-                      </td>
-                      <td className="text-right py-2 text-terminal-purple">
-                        {((day.cachedTokens || 0) / 1000).toFixed(1)}K
-                      </td>
-                      <td className="text-right py-2 text-terminal-green">
-                        ${day.costUsd.toFixed(3)}
-                      </td>
+            {data.daily.length === 0 ? (
+              <p className="text-terminal-muted">No usage data yet</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-terminal-muted border-b border-terminal-border">
+                      <th className="text-left py-2">Date</th>
+                      <th className="text-right py-2">Requests</th>
+                      <th className="text-right py-2">Input Tokens</th>
+                      <th className="text-right py-2">Output Tokens</th>
+                      <th className="text-right py-2">Total</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {data.daily.map((day) => (
+                      <tr key={day.date} className="border-b border-terminal-border/50">
+                        <td className="py-2">{day.date}</td>
+                        <td className="text-right py-2">{day.requests}</td>
+                        <td className="text-right py-2">
+                          {(day.inputTokens / 1000).toFixed(1)}K
+                        </td>
+                        <td className="text-right py-2">
+                          {(day.outputTokens / 1000).toFixed(1)}K
+                        </td>
+                        <td className="text-right py-2 text-terminal-accent">
+                          {((day.inputTokens + day.outputTokens) / 1000).toFixed(1)}K
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
-          {/* Pricing Reference */}
-          <div className="mt-6 text-sm text-terminal-muted">
-            <p className="mb-2">Pricing (Kimi K2.5 via Moonshot API):</p>
-            <ul className="list-disc list-inside space-y-1">
-              <li>Input: $0.60 / million tokens</li>
-              <li>Output: $2.50 / million tokens</li>
-              <li>Cached input: $0.15 / million tokens (75% discount)</li>
+          {/* Pricing Note */}
+          <div className="mt-6 p-4 bg-terminal-accent/10 border border-terminal-accent/30 rounded-lg">
+            <div className="flex items-center gap-2 text-terminal-accent font-medium mb-2">
+              <span>&#9889;</span> Self-Hosted Benefits
+            </div>
+            <ul className="text-sm text-terminal-muted space-y-1">
+              <li>&#10003; Unlimited tokens - pay only for GPU compute</li>
+              <li>&#10003; Data stays on your infrastructure</li>
+              <li>&#10003; No rate limits from external APIs</li>
+              <li>&#10003; Full control over model selection</li>
             </ul>
           </div>
         </div>

@@ -1,129 +1,72 @@
-# Sadary LLM Hub
-
-> **Self-hosted LLMs with Claude Code UI — FREE tokens, pay only GPU**
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  YOUR LOCAL COMPUTER                                            │
-│  Desktop Client (Tauri) — Claude Code style UI                  │
-│                                                                 │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────────┐   │
-│  │ Instance 1  │ │ Instance 2  │ │ Instance 3              │   │
-│  │ (Code)      │ │ (Research)  │ │ (Writing)               │   │
-│  └──────┬──────┘ └──────┬──────┘ └──────────┬──────────────┘   │
-│         │               │                    │                  │
-│         └───────────────┼────────────────────┘                  │
-│                         │ HTTPS                                 │
-└─────────────────────────┼───────────────────────────────────────┘
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  CLOUD GPU (RunPod / Vast.ai / Shadow)                          │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Ollama + LLM Models (Qwen 72B, Llama 70B, etc.)         │  │
-│  │  FREE tokens — pay only GPU rental                        │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  API Server (Next.js)                                     │  │
-│  │  - Auth + Team management                                 │  │
-│  │  - Multi-instance support                                 │  │
-│  │  - Usage tracking (for analytics, not billing)            │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  Cloudflare Tunnel → llm.sadary.xyz                             │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Key Points
-
-| Feature | Description |
-|---------|-------------|
-| **Tokens** | FREE — self-hosted, no per-token costs |
-| **Pay only** | GPU cloud rental (~$0.30-2/hr) |
-| **Interface** | Claude Code style — terminal UI, multi-instance |
-| **Models** | Qwen 2.5 72B, Llama 3.3 70B, DeepSeek Coder |
-| **Tool calling** | Local execution (files, shell, git) on YOUR machine |
-
-## Cost Comparison
-
-| Setup | Monthly Cost |
-|-------|-------------|
-| **Self-hosted (this)** | ~$50-200/mo (GPU only) |
-| Claude API | $100-500+/mo (tokens) |
-| Cursor Pro | $20/mo × users |
-| ChatGPT Plus | $20/mo × users |
-
-## Models (Self-Hosted)
-
-| Model | VRAM | Speed | Best For |
-|-------|------|-------|----------|
-| `qwen2.5:72b` | 48GB | 20-30 tok/s | Best quality |
-| `llama3.3:70b` | 48GB | 25-35 tok/s | Long context (128K) |
-| `qwen2.5:32b` | 24GB | 40-50 tok/s | Good balance |
-| `deepseek-coder-v2:16b` | 12GB | 60-80 tok/s | Code specialist |
+# Rodeo - Self-Hosted AI Coding Assistant
 
 ## Quick Start
 
-### 1. Setup GPU Cloud
-
 ```bash
-# Option A: RunPod (~$0.50-2/hr for A100)
-# Option B: Vast.ai (~$0.30-1/hr)
-# Option C: Shadow PC (~$30-50/mo, RTX 4090)
+# One-liner install
+curl -fsSL https://raw.githubusercontent.com/your-repo/rodeo/main/install.sh | bash
 ```
 
-### 2. Deploy on GPU Server
+Or manually:
 
 ```bash
-git clone https://github.com/sadary-dev/llm-hub.git
-cd llm-hub
-
-# Copy and configure
-cp .env.example .env
-# Edit .env with your settings
-
-# Start services
-docker compose up -d
-
-# Pull model (one time)
-docker exec ollama ollama pull qwen2.5:72b
+git clone <repo-url> && cd rodeo
+npm run install    # Installs everything (Ollama, deps, DB)
+npm run server     # Start webapp at http://localhost:3000
 ```
-
-### 3. Setup Tunnel
-
-```bash
-./scripts/setup-tunnel.sh llm-hub llm.sadary.xyz
-```
-
-### 4. Run Desktop Client
-
-```bash
-cd desktop
-npm install
-npm run tauri:dev
-```
-
-## Team
-
-| Member | Role |
-|--------|------|
-| Vincent | CTO — Code, Solana |
-| Pauline | CEO — Comms, Content |
-| Rémi | COO — Strategy |
-| Devs | Code, Testing |
-
-## Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `⌘K` | Command Palette |
-| `⌘N` | New Instance |
-| `⌘M` | Model Selector |
-| `⌘,` | Settings |
 
 ---
 
-**Sadary** — No WeSplit references.
+## 🎨 Front-End Developer Setup
+
+Quick setup for designers/front-end devs with Figma integration:
+
+```bash
+# 1. Install CLI
+cd cli && npm install
+
+# 2. Get Figma token from https://www.figma.com/settings
+#    → Personal Access Tokens → Generate new token
+
+# 3. Configure Figma (one command)
+./setup-figma.sh figd_YOUR_TOKEN_HERE
+
+# 4. Start coding with Figma
+./run.sh
+```
+
+### Figma Commands
+```bash
+/figma files                      # List your Figma files
+/figma components <file-key>      # See all components
+/figma code <key> <node-id> react # Generate React code
+/figma tokens <key>               # Export CSS variables
+```
+
+### AI-Powered Design-to-Code
+Just ask naturally:
+```
+"Implement the Button component from figma file ABC123"
+"Extract the color palette as Tailwind config"
+"Show me the header styles and generate the CSS"
+```
+
+📖 **Full guide:** See [FRONTEND-DEV-QUICKSTART.md](./FRONTEND-DEV-QUICKSTART.md)
+
+---
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run server` | Start Next.js webapp |
+| `npm run cli` | Run Rodeo CLI |
+| `npm run install` | Full setup (Ollama, deps, DB) |
+
+## Models
+
+| Provider | Models | Cost |
+|----------|--------|------|
+| **Ollama** | qwen2.5:7b, qwen2.5-coder:7b, llama3.3:70b | FREE |
+| **Moonshot** | kimi-k2.5, kimi-k2-thinking | API pricing |
+| **DeepSeek** | deepseek-chat, deepseek-coder | API pricing |
