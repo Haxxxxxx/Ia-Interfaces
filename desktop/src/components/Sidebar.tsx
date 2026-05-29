@@ -58,7 +58,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="px-2 py-2 border-b border-terminal-border space-y-1">
-        {([["chat", "▸", "Chat"], ["dashboard", "▦", "Performance"]] as const).map(([v, icon, label]) => (
+        {([["chat", "▸", "Chat"], ["tasks", "◷", "Tasks"], ["dashboard", "▦", "Performance"]] as const).map(([v, icon, label]) => (
           <button
             key={v}
             onClick={() => setView(v)}

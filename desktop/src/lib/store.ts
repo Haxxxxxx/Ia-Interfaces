@@ -33,6 +33,16 @@ export interface PerfEvent {
   ok?: boolean;        // tool success
 }
 
+export interface AgentTask {
+  id: string;
+  title: string;
+  detail?: string;
+  status: "pending" | "running" | "done" | "failed" | "skipped";
+  result?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface Instance {
   id: string;
   name: string;
@@ -86,13 +96,33 @@ interface AppState {
   setConnected: (connected: boolean) => void;
 
   // Views
-  view: "chat" | "dashboard";
-  setView: (v: "chat" | "dashboard") => void;
+  view: "chat" | "tasks" | "dashboard";
+  setView: (v: "chat" | "tasks" | "dashboard") => void;
 
   // Perf metrics (session only)
   metrics: PerfEvent[];
   addMetric: (e: PerfEvent) => void;
   clearMetrics: () => void;
+
+  // Autonomous task queue (self-managing)
+  tasks: AgentTask[];
+  addTask: (title: string, detail?: string) => string;
+  updateTask: (id: string, patch: Partial<AgentTask>) => void;
+  removeTask: (id: string) => void;
+  clearTasks: (which: "done" | "all") => void;
+  reorderTask: (id: string, dir: "up" | "down") => void;
+  autonomousRunning: boolean;
+  setAutonomousRunning: (v: boolean) => void;
+  autonomousLog: string[];
+  appendAutonomousLog: (line: string) => void;
+  clearAutonomousLog: () => void;
+
+  // Learning / nightly self-update
+  learnedProfile: string;
+  lastLearnedAt: number;
+  selfUpdateEnabled: boolean;
+  setSelfUpdateEnabled: (v: boolean) => void;
+  setLearned: (profile: string, at: number) => void;
 }
 
 export const useStore = create<AppState>()(
@@ -209,6 +239,42 @@ export const useStore = create<AppState>()(
       addMetric: (e) =>
         set((state) => ({ metrics: [...state.metrics.slice(-299), e] })),
       clearMetrics: () => set({ metrics: [] }),
+
+      // Autonomous task queue
+      tasks: [],
+      addTask: (title, detail) => {
+        const id = crypto.randomUUID();
+        const now = Date.now();
+        set((s) => ({ tasks: [...s.tasks, { id, title, detail, status: "pending", createdAt: now, updatedAt: now }] }));
+        return id;
+      },
+      updateTask: (id, patch) =>
+        set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch, updatedAt: Date.now() } : t)) })),
+      removeTask: (id) => set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) })),
+      clearTasks: (which) =>
+        set((s) => ({ tasks: which === "all" ? [] : s.tasks.filter((t) => t.status !== "done" && t.status !== "skipped") })),
+      reorderTask: (id, dir) =>
+        set((s) => {
+          const i = s.tasks.findIndex((t) => t.id === id);
+          if (i < 0) return {};
+          const j = dir === "up" ? i - 1 : i + 1;
+          if (j < 0 || j >= s.tasks.length) return {};
+          const next = [...s.tasks];
+          [next[i], next[j]] = [next[j], next[i]];
+          return { tasks: next };
+        }),
+      autonomousRunning: false,
+      setAutonomousRunning: (autonomousRunning) => set({ autonomousRunning }),
+      autonomousLog: [],
+      appendAutonomousLog: (line) => set((s) => ({ autonomousLog: [...s.autonomousLog.slice(-499), line] })),
+      clearAutonomousLog: () => set({ autonomousLog: [] }),
+
+      // Learning / nightly self-update
+      learnedProfile: "",
+      lastLearnedAt: 0,
+      selfUpdateEnabled: true,
+      setSelfUpdateEnabled: (selfUpdateEnabled) => set({ selfUpdateEnabled }),
+      setLearned: (learnedProfile, lastLearnedAt) => set({ learnedProfile, lastLearnedAt }),
     }),
     {
       name: "rodeo-storage",
@@ -222,6 +288,10 @@ export const useStore = create<AppState>()(
         instances: state.instances,
         activeInstanceId: state.activeInstanceId,
         sidebarCollapsed: state.sidebarCollapsed,
+        tasks: state.tasks,
+        learnedProfile: state.learnedProfile,
+        lastLearnedAt: state.lastLearnedAt,
+        selfUpdateEnabled: state.selfUpdateEnabled,
       }),
     }
   )

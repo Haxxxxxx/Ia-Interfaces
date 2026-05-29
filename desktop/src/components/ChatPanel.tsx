@@ -20,7 +20,7 @@ export function ChatPanel() {
   const ctxCache = useRef<{ dir: string; ctx: string } | null>(null);
 
   const {
-    apiKey, mode, localModel, autoApprove, ollamaUp,
+    apiKey, mode, localModel, autoApprove, ollamaUp, learnedProfile,
     workingDirectory, setWorkingDirectory,
     instances, activeInstanceId, addMessage, updateLastMessage, addMetric,
   } = useStore();
@@ -113,7 +113,7 @@ export function ChatPanel() {
       return;
     }
     const ctx = await getContext();
-    const system = buildSystemPrompt(ctx, workingDirectory);
+    const system = buildSystemPrompt(ctx, workingDirectory, { learned: learnedProfile });
     const history = buildHistory(system, userText);
 
     const abort = new AbortController();

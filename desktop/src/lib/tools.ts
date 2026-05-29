@@ -144,15 +144,73 @@ export const TOOL_SCHEMAS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "TaskList",
+      description: "View the current task queue (id, title, status). Use to plan and track multi-step / autonomous work.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "TaskAdd",
+      description: "Add a new task to the queue. Use when you discover follow-up work needed to satisfy the current goal — you manage your own list.",
+      parameters: {
+        type: "object",
+        required: ["title"],
+        properties: {
+          title: { type: "string", description: "Short imperative title" },
+          detail: { type: "string", description: "Optional details / acceptance criteria" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "TaskUpdate",
+      description: "Update a task's status or text. Mark the current task done/failed, or refine pending tasks based on what you learned.",
+      parameters: {
+        type: "object",
+        required: ["id"],
+        properties: {
+          id: { type: "string", description: "Task id (from TaskList)" },
+          status: { type: "string", enum: ["pending", "done", "failed", "skipped"], description: "New status" },
+          title: { type: "string", description: "New title (optional)" },
+          detail: { type: "string", description: "New detail (optional)" },
+        },
+      },
+    },
+  },
 ];
 
-/** Tools that only read state — safe to auto-run without approval. */
-export const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "List"]);
+/** Tools that only read state or manage the in-app queue — safe to auto-run. */
+export const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "List", "TaskList", "TaskAdd", "TaskUpdate"]);
 
 /** Tools that change the filesystem or run commands — gated by approval. */
 export const MUTATING_TOOLS = new Set(["Write", "Edit", "MultiEdit", "Bash"]);
 
-export function buildSystemPrompt(projectContext: string, workingDir: string): string {
+export function buildSystemPrompt(
+  projectContext: string,
+  workingDir: string,
+  opts: { learned?: string; autonomous?: boolean } = {}
+): string {
+  const autonomyBlock = opts.autonomous
+    ? `
+## AUTONOMOUS MODE (the user is away)
+- You are running unattended. Do NOT ask the user questions — make the best decision and proceed.
+- Work the task to completion. Use TaskList to see the queue; mark the current task done/failed with TaskUpdate when finished.
+- If you discover follow-up work, add it with TaskAdd. If a pending task no longer makes sense given what you learned, refine or skip it with TaskUpdate — you manage your own list.
+- VERIFY every change (typecheck/lint/tests). If something is destructive or irreversible and you're unsure, mark the task failed with a clear note rather than guessing.
+- Keep going until the task is genuinely done; summarize the outcome at the end.`
+    : "";
+
+  const learnedBlock = opts.learned
+    ? `\n## Learned profile (from past sessions)\n${opts.learned}`
+    : "";
+
   return `You are Rodeo, an autonomous AI coding assistant running locally and offline. You write, edit, and run code directly on the user's machine using tools.
 
 Working directory: ${workingDir || "(not set — ask the user to set one)"}
@@ -165,10 +223,11 @@ Working directory: ${workingDir || "(not set — ask the user to set one)"}
 - After changing code, VERIFY: run the project's typecheck/lint/tests with Bash (e.g. npx tsc --noEmit, npm run lint, npm test) and fix what you broke.
 - Make the smallest change that solves the problem. Match the surrounding code style.
 - Work step by step: explore → plan → edit → verify. Keep going until the task is truly done.
-
+${autonomyBlock}
 ## Output
 - Be concise. Lead with what you did. Show diffs/snippets, not whole files.
 - Don't narrate every tool call; just do the work and summarize the result.
+${learnedBlock}
 
 ## Project context
 ${projectContext || "(no project context gathered yet)"}`;

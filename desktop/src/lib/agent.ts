@@ -37,6 +37,8 @@ export interface AgentOptions {
   model: string;
   cwd: string;
   autoApprove: boolean;
+  guarded?: boolean;       // enforce destructive-command + working-dir guardrails
+  maxIterations?: number;  // override the default step cap (autonomous runs go higher)
   signal?: AbortSignal;
 }
 
@@ -46,8 +48,9 @@ export async function runAgent(
   cb: AgentCallbacks = {}
 ): Promise<ChatMessage[]> {
   let lastSignature = "";
+  const maxIter = opts.maxIterations ?? MAX_ITERATIONS;
 
-  for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+  for (let iter = 0; iter < maxIter; iter++) {
     cb.onIteration?.(iter + 1);
 
     let content = "";
@@ -151,7 +154,7 @@ export async function runAgent(
         result = "User denied this action. Stop and ask the user how to proceed.";
       } else {
         const tt0 = performance.now();
-        result = await executeTool(tc, opts.cwd);
+        result = await executeTool(tc, opts.cwd, opts.guarded);
         cb.onToolMetric?.({
           toolName: tc.function.name,
           durationMs: Math.round(performance.now() - tt0),
@@ -168,7 +171,7 @@ export async function runAgent(
 
   messages.push({
     role: "assistant",
-    content: `(Reached the ${MAX_ITERATIONS}-step limit. I'll pause here — let me know if you want me to keep going.)`,
+    content: `(Reached the ${maxIter}-step limit. Pausing here.)`,
   });
   return messages;
 }

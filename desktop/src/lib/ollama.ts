@@ -78,11 +78,25 @@ export async function listLocalModels(): Promise<OllamaModel[]> {
 const TOOL_CAPABLE = [
   "qwen2.5", "qwen2", "qwq", "llama3.1", "llama3.2", "llama3.3",
   "mistral", "mixtral", "command-r", "firefunction", "hermes", "granite",
+  "rodeo", // our baked model (always FROM a tool-capable base)
 ];
 
 export function modelSupportsTools(model: string): boolean {
   const lower = model.toLowerCase();
   return TOOL_CAPABLE.some((m) => lower.includes(m));
+}
+
+/** Non-streaming completion — used by the nightly self-update distiller. */
+export async function ollamaComplete(messages: ChatMessage[], model: string, signal?: AbortSignal): Promise<string> {
+  const res = await fetch(`${OLLAMA_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages, stream: false, temperature: 0.2 }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Ollama error ${res.status}`);
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
 }
 
 /**

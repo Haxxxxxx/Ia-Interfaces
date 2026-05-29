@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { Dashboard } from "./components/Dashboard";
+import { TasksView } from "./components/TasksView";
+import { shouldSelfUpdate, runSelfUpdate } from "./lib/learning";
 import { StatusBar } from "./components/StatusBar";
 import { SettingsModal } from "./components/SettingsModal";
 import { CommandPalette } from "./components/CommandPalette";
@@ -63,6 +65,18 @@ function App() {
     if (s.instances.length === 0) createInstance("Rodeo", s.localModel);
   }, [createInstance]);
 
+  // Nightly self-update scheduler: catch-up shortly after launch, then hourly check.
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      if (cancelled || !shouldSelfUpdate()) return;
+      try { await runSelfUpdate(); } catch { /* logged in store */ }
+    }
+    const t = setTimeout(tick, 15000);
+    const iv = setInterval(tick, 60 * 60 * 1000);
+    return () => { cancelled = true; clearTimeout(t); clearInterval(iv); };
+  }, []);
+
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -107,7 +121,7 @@ function App() {
       {/* Main */}
       <div className="flex-1 flex overflow-hidden">
         <Sidebar />
-        {view === "dashboard" ? <Dashboard /> : <ChatPanel />}
+        {view === "dashboard" ? <Dashboard /> : view === "tasks" ? <TasksView /> : <ChatPanel />}
       </div>
 
       {/* Status Bar */}
