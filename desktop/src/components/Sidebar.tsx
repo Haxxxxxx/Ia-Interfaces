@@ -14,6 +14,8 @@ export function Sidebar() {
     sidebarCollapsed,
     toggleSidebar,
     setShowSettings,
+    view,
+    setView,
   } = useStore();
 
   function handleCreateInstance(e: React.FormEvent) {
@@ -43,8 +45,8 @@ export function Sidebar() {
       {/* Header */}
       <div className="p-4 border-b border-terminal-border flex items-center justify-between">
         <span className="font-semibold flex items-center gap-2">
-          <span>⚡</span>
-          <span>Sadary Hub</span>
+          <span className="text-terminal-accent">▸</span>
+          <span>Rodeo</span>
         </span>
         <button
           onClick={toggleSidebar}
@@ -53,6 +55,22 @@ export function Sidebar() {
           ◀
         </button>
       </div>
+
+      {/* Nav */}
+      <nav className="px-2 py-2 border-b border-terminal-border space-y-1">
+        {([["chat", "▸", "Chat"], ["dashboard", "▦", "Performance"]] as const).map(([v, icon, label]) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            className={`w-full flex items-center gap-2 px-3 py-2 rounded text-sm transition-colors ${
+              view === v ? "bg-terminal-accent/15 text-terminal-accent" : "text-terminal-muted hover:bg-terminal-surface hover:text-terminal-text"
+            }`}
+          >
+            <span>{icon}</span>
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
 
       {/* Instances */}
       <div className="flex-1 overflow-auto p-2">

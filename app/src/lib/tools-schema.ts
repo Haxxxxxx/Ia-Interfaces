@@ -82,6 +82,38 @@ Usage:
   {
     type: "function",
     function: {
+      name: "MultiEdit",
+      description: `Apply multiple exact string replacements to a SINGLE file in one atomic call.
+
+Usage:
+- You must read the file first.
+- Edits apply in order; if any edit fails, NONE are written (atomic).
+- Prefer this over several sequential Edit calls on the same file.`,
+      parameters: {
+        type: "object",
+        required: ["file_path", "edits"],
+        properties: {
+          file_path: { type: "string", description: "The absolute path to the file to modify" },
+          edits: {
+            type: "array",
+            description: "Ordered list of edits to apply",
+            items: {
+              type: "object",
+              required: ["old_string", "new_string"],
+              properties: {
+                old_string: { type: "string", description: "Exact text to replace" },
+                new_string: { type: "string", description: "Replacement text" },
+                replace_all: { type: "boolean", description: "Replace all occurrences (default false)" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "Write",
       description: `Write a file to the local filesystem.
 

@@ -145,6 +145,16 @@ const OLLAMA_MODELS: ModelInfo[] = [
   },
 ];
 
+// Ollama models in the qwen2.5 / llama3.1+ / mistral families support
+// OpenAI-style function calling (verified against the local daemon). Tag them
+// so the UI and clients know they can drive the agentic tool loop.
+for (const m of OLLAMA_MODELS) {
+  const id = m.id.toLowerCase();
+  if (/qwen2\.5|qwen2|llama3\.[123]|mistral|mixtral|command-r|granite/.test(id) && !m.capabilities.includes("tool_calling")) {
+    m.capabilities.push("tool_calling");
+  }
+}
+
 // Moonshot API models (paid per token)
 const MOONSHOT_MODELS: ModelInfo[] = [
   {

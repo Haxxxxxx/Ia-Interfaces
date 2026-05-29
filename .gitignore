@@ -27,6 +27,10 @@ npm-debug.log*
 
 # Tauri
 desktop/src-tauri/target/
+desktop/src-tauri/gen/
+
+# TS build cache
+*.tsbuildinfo
 
 # Backups
 backups/

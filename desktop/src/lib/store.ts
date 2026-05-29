@@ -20,6 +20,19 @@ interface ToolCall {
   };
 }
 
+export interface PerfEvent {
+  id: string;
+  ts: number;
+  kind: "turn" | "tool";
+  model?: string;
+  ttftMs?: number;     // turn: time to first token
+  durationMs: number;  // turn: stream duration; tool: exec time
+  tokens?: number;     // turn: approx tokens generated
+  tokPerSec?: number;  // turn
+  toolName?: string;   // tool
+  ok?: boolean;        // tool success
+}
+
 interface Instance {
   id: string;
   name: string;
@@ -42,6 +55,17 @@ interface AppState {
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
 
+  // Offline brain
+  mode: "local" | "remote";
+  setMode: (mode: "local" | "remote") => void;
+  localModel: string;
+  setLocalModel: (model: string) => void;
+  autoApprove: boolean;
+  setAutoApprove: (on: boolean) => void;
+  ollamaUp: boolean;
+  ollamaModels: string[];
+  setOllama: (state: { up: boolean; models?: string[] }) => void;
+
   // Instances
   instances: Instance[];
   activeInstanceId: string | null;
@@ -60,11 +84,20 @@ interface AppState {
   // Connection
   isConnected: boolean;
   setConnected: (connected: boolean) => void;
+
+  // Views
+  view: "chat" | "dashboard";
+  setView: (v: "chat" | "dashboard") => void;
+
+  // Perf metrics (session only)
+  metrics: PerfEvent[];
+  addMetric: (e: PerfEvent) => void;
+  clearMetrics: () => void;
 }
 
 export const useStore = create<AppState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       // Auth
       apiKey: "",
       setApiKey: (key) => set({ apiKey: key }),
@@ -74,6 +107,20 @@ export const useStore = create<AppState>()(
       setApiUrl: (url) => set({ apiUrl: url }),
       workingDirectory: "",
       setWorkingDirectory: (dir) => set({ workingDirectory: dir }),
+
+      // Offline brain — default to fully-local operation
+      mode: "local",
+      setMode: (mode) => set({ mode }),
+      // Instruct models tool-call reliably under Ollama; the -coder variants
+      // tend to emit tool calls as plain text, breaking the agentic loop.
+      localModel: "qwen2.5:7b",
+      setLocalModel: (localModel) => set({ localModel }),
+      autoApprove: false,
+      setAutoApprove: (autoApprove) => set({ autoApprove }),
+      ollamaUp: false,
+      ollamaModels: [],
+      setOllama: ({ up, models }) =>
+        set((s) => ({ ollamaUp: up, ollamaModels: models ?? s.ollamaModels })),
 
       // Instances
       instances: [],
@@ -152,13 +199,26 @@ export const useStore = create<AppState>()(
       // Connection
       isConnected: false,
       setConnected: (connected) => set({ isConnected: connected }),
+
+      // Views
+      view: "chat",
+      setView: (view) => set({ view }),
+
+      // Perf metrics (session only, capped)
+      metrics: [],
+      addMetric: (e) =>
+        set((state) => ({ metrics: [...state.metrics.slice(-299), e] })),
+      clearMetrics: () => set({ metrics: [] }),
     }),
     {
-      name: "sadary-hub-storage",
+      name: "rodeo-storage",
       partialize: (state) => ({
         apiKey: state.apiKey,
         apiUrl: state.apiUrl,
         workingDirectory: state.workingDirectory,
+        mode: state.mode,
+        localModel: state.localModel,
+        autoApprove: state.autoApprove,
         instances: state.instances,
         activeInstanceId: state.activeInstanceId,
         sidebarCollapsed: state.sidebarCollapsed,

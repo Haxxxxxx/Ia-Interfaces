@@ -1,25 +1,45 @@
 import { useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
+import { Dashboard } from "./components/Dashboard";
 import { StatusBar } from "./components/StatusBar";
 import { SettingsModal } from "./components/SettingsModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { ModelSelector } from "./components/ModelSelector";
 import { useStore } from "./lib/store";
+import { isOllamaUp, listLocalModels } from "./lib/ollama";
 
 function App() {
-  const { apiKey, apiUrl, setConnected, setShowSettings, createInstance } = useStore();
+  const { apiKey, apiUrl, mode, view, setConnected, setShowSettings, createInstance, setOllama } = useStore();
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
 
-  // Check connection on mount and when apiKey/apiUrl changes
+  // Poll local Ollama (offline brain) — health + installed models.
+  useEffect(() => {
+    let cancelled = false;
+    async function checkOllama() {
+      const up = await isOllamaUp();
+      if (cancelled) return;
+      if (up) {
+        try {
+          const models = await listLocalModels();
+          setOllama({ up: true, models: models.map((m) => m.name) });
+        } catch {
+          setOllama({ up: true });
+        }
+      } else {
+        setOllama({ up: false });
+      }
+    }
+    checkOllama();
+    const interval = setInterval(checkOllama, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [setOllama]);
+
+  // Check remote connection (only relevant in remote mode)
   useEffect(() => {
     async function checkConnection() {
-      if (!apiKey) {
-        setConnected(false);
-        return;
-      }
-
+      if (!apiKey) { setConnected(false); return; }
       try {
         const res = await fetch(`${apiUrl}/api/health`);
         setConnected(res.ok);
@@ -27,18 +47,21 @@ function App() {
         setConnected(false);
       }
     }
-
     checkConnection();
     const interval = setInterval(checkConnection, 30000);
     return () => clearInterval(interval);
   }, [apiKey, apiUrl, setConnected]);
 
-  // Show settings on first launch if no API key
+  // First-launch: open Settings only if remote mode lacks a key.
   useEffect(() => {
-    if (!apiKey) {
-      setShowSettings(true);
-    }
-  }, [apiKey, setShowSettings]);
+    if (mode === "remote" && !apiKey) setShowSettings(true);
+  }, [apiKey, mode, setShowSettings]);
+
+  // Ensure there's always at least one instance to chat in.
+  useEffect(() => {
+    const s = useStore.getState();
+    if (s.instances.length === 0) createInstance("Rodeo", s.localModel);
+  }, [createInstance]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -78,13 +101,13 @@ function App() {
     <div className="h-screen flex flex-col bg-terminal-bg">
       {/* Titlebar (macOS traffic lights spacing) */}
       <div className="h-8 titlebar-drag flex items-center px-20 border-b border-terminal-border bg-terminal-surface/50">
-        <span className="text-xs text-terminal-muted">Sadary Hub</span>
+        <span className="text-xs text-terminal-muted">Rodeo</span>
       </div>
 
       {/* Main */}
       <div className="flex-1 flex overflow-hidden">
         <Sidebar />
-        <ChatPanel />
+        {view === "dashboard" ? <Dashboard /> : <ChatPanel />}
       </div>
 
       {/* Status Bar */}

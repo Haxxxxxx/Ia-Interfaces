@@ -23,6 +23,7 @@ export interface ToolExecutionContext {
   projectRoot: string; // Sandbox boundary
   sessionId?: string;
   agentName?: string; // Current agent (build, plan, explore, general)
+  model?: string; // Model to use for spawned subagents (Task tool)
   onFileChange?: (change: FileChange) => void;
 }
 
@@ -142,6 +143,52 @@ export function clearSessionReadFiles(sessionId: string): void {
 }
 
 // ============================================================================
+// Edit core (shared by Edit / MultiEdit) — exact first, then whitespace-fuzzy
+// ============================================================================
+
+interface StringEdit { old_string: string; new_string: string; replace_all?: boolean }
+
+/**
+ * Apply a single string edit to content. Tries an exact match first, then a
+ * whitespace-tolerant fuzzy match (matches a contiguous block by trimmed lines
+ * and re-indents the replacement). Returns the new content or an error.
+ */
+function applyStringEdit(content: string, edit: StringEdit): { content: string; replacements: number; error?: string } {
+  const { old_string, new_string, replace_all } = edit;
+
+  if (old_string === new_string) {
+    return { content, replacements: 0, error: "old_string and new_string are identical" };
+  }
+
+  const occurrences = content.split(old_string).length - 1;
+  if (occurrences > 0) {
+    if (occurrences > 1 && !replace_all) {
+      return { content, replacements: 0, error: `Found ${occurrences} occurrences. Add more context to make it unique, or use replace_all: true.` };
+    }
+    const next = replace_all ? content.split(old_string).join(new_string) : content.replace(old_string, new_string);
+    return { content: next, replacements: replace_all ? occurrences : 1 };
+  }
+
+  // Fuzzy: match a contiguous run of lines by trimmed content.
+  const fileLines = content.split("\n");
+  const oldLines = old_string.split("\n");
+  const oldTrim = oldLines.map((l) => l.trim());
+  for (let i = 0; i + oldLines.length <= fileLines.length; i++) {
+    let match = true;
+    for (let j = 0; j < oldLines.length; j++) {
+      if (fileLines[i + j].trim() !== oldTrim[j]) { match = false; break; }
+    }
+    if (!match) continue;
+    const indent = fileLines[i].match(/^\s*/)?.[0] ?? "";
+    const replacement = indent + new_string.replace(/^\s+/, "");
+    const out = [...fileLines.slice(0, i), ...replacement.split("\n"), ...fileLines.slice(i + oldLines.length)];
+    return { content: out.join("\n"), replacements: 1 };
+  }
+
+  return { content, replacements: 0, error: "old_string not found in file. Re-read the file and copy the exact text (including whitespace)." };
+}
+
+// ============================================================================
 // Tool Implementations
 // ============================================================================
 
@@ -242,52 +289,68 @@ async function executeEdit(
     const content = await fs.readFile(filePath, "utf-8");
     const backup = content;
 
-    // Count occurrences
-    const occurrences = content.split(args.old_string).length - 1;
-
-    if (occurrences === 0) {
-      return {
-        success: false,
-        output: "",
-        error: `old_string not found in file. Make sure you're matching exactly, including whitespace and indentation.`,
-      };
+    const { content: newContent, replacements, error } = applyStringEdit(content, args);
+    if (error) {
+      return { success: false, output: "", error };
     }
-
-    if (occurrences > 1 && !args.replace_all) {
-      return {
-        success: false,
-        output: "",
-        error: `Found ${occurrences} occurrences of old_string. Provide more context to make it unique, or use replace_all: true.`,
-      };
-    }
-
-    // Perform replacement
-    const newContent = args.replace_all
-      ? content.replaceAll(args.old_string, args.new_string)
-      : content.replace(args.old_string, args.new_string);
 
     // Write new content
     await fs.writeFile(filePath, newContent, "utf-8");
 
     // Track change for undo
     if (ctx.onFileChange) {
-      ctx.onFileChange({
-        type: "edit",
-        path: filePath,
-        timestamp: new Date(),
-        backup,
-      });
+      ctx.onFileChange({ type: "edit", path: filePath, timestamp: new Date(), backup });
     }
 
     return {
       success: true,
-      output: args.replace_all
-        ? `Replaced ${occurrences} occurrences in ${args.file_path}`
+      output: replacements > 1
+        ? `Replaced ${replacements} occurrences in ${args.file_path}`
         : `Successfully edited ${args.file_path}`,
-      metadata: {
-        replacements: args.replace_all ? occurrences : 1,
-        filePath,
-      },
+      metadata: { replacements, filePath },
+    };
+  } catch (err: any) {
+    return { success: false, output: "", error: err.message };
+  }
+}
+
+/**
+ * Apply several edits to one file atomically (all-or-nothing).
+ */
+async function executeMultiEdit(
+  args: { file_path: string; edits: StringEdit[] },
+  ctx: ToolExecutionContext
+): Promise<ToolResult> {
+  try {
+    const sessionId = ctx.sessionId || ctx.instanceId;
+    const filePath = validatePath(args.file_path, ctx.projectRoot);
+
+    if (!hasFileBeenRead(sessionId, filePath)) {
+      return { success: false, output: "", error: "You must read the file before editing it. Use the Read tool first." };
+    }
+    if (!Array.isArray(args.edits) || args.edits.length === 0) {
+      return { success: false, output: "", error: "edits must be a non-empty array." };
+    }
+
+    const backup = await fs.readFile(filePath, "utf-8");
+    let working = backup;
+    for (let i = 0; i < args.edits.length; i++) {
+      const { content, error } = applyStringEdit(working, args.edits[i]);
+      if (error) {
+        return { success: false, output: "", error: `Edit ${i + 1}/${args.edits.length} failed: ${error}. No changes were written.` };
+      }
+      working = content;
+    }
+
+    await fs.writeFile(filePath, working, "utf-8");
+    if (ctx.onFileChange) {
+      ctx.onFileChange({ type: "edit", path: filePath, timestamp: new Date(), backup });
+    }
+
+    return {
+      success: true,
+      output: `Applied ${args.edits.length} edits to ${args.file_path}`,
+      metadata: { edits: args.edits.length, filePath },
     };
   } catch (err: any) {
     return { success: false, output: "", error: err.message };
@@ -590,19 +653,129 @@ async function executeList(
   }
 }
 
+/**
+ * Web search (best-effort). Uses DuckDuckGo's HTML endpoint and extracts the
+ * top results. Requires network access; degrades gracefully when offline.
+ */
+async function executeWebSearch(args: { query: string }): Promise<ToolResult> {
+  if (!args.query?.trim()) {
+    return { success: false, output: "", error: "query is required" };
+  }
+  try {
+    const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(args.query)}`, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; RodeoBot/1.0)" },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) throw new Error(`search returned ${res.status}`);
+    const html = await res.text();
+
+    const results: string[] = [];
+    const linkRe = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+    const snippetRe = /<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+    const snippets: string[] = [];
+    let s: RegExpExecArray | null;
+    while ((s = snippetRe.exec(html)) && snippets.length < 8) snippets.push(strip(s[1]));
+    let m: RegExpExecArray | null;
+    let i = 0;
+    while ((m = linkRe.exec(html)) && results.length < 8) {
+      const url = decodeURIComponent((m[1].match(/uddg=([^&]+)/)?.[1]) || m[1]);
+      results.push(`${results.length + 1}. ${strip(m[2])}\n   ${url}${snippets[i] ? `\n   ${snippets[i]}` : ""}`);
+      i++;
+    }
+    return {
+      success: true,
+      output: results.length ? results.join("\n\n") : "No results found.",
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      output: "",
+      error: `Web search unavailable (${err.message}). You may be offline — answer from your own knowledge or use local files.`,
+    };
+  }
+}
+
+function strip(html: string): string {
+  return html.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Task: spawn a server-side subagent that runs its own short agentic loop with
+ * a restricted toolset, then returns a synthesized result to the parent.
+ */
+async function executeTask(
+  args: { description: string; prompt: string; subagent_type: string },
+  ctx: ToolExecutionContext
+): Promise<ToolResult> {
+  const subType = args.subagent_type === "explore" ? "explore" : "general";
+  if (!args.prompt?.trim()) {
+    return { success: false, output: "", error: "prompt is required" };
+  }
+
+  try {
+    const { chat } = await import("./llm-client");
+    const { TOOLS } = await import("./tools-schema");
+    const subTools = getToolsForAgent(subType, TOOLS);
+    const model = ctx.model || process.env.DEFAULT_MODEL || "qwen2.5:7b";
+
+    const messages: any[] = [
+      {
+        role: "system",
+        content: `You are a ${subType} subagent. Complete this focused task using your tools, then return a concise result. Working directory: ${ctx.projectRoot}. Do not ask questions — gather what you need with tools.`,
+      },
+      { role: "user", content: args.prompt },
+    ];
+
+    const MAX = subType === "explore" ? 6 : 8;
+    let final = "";
+    for (let iter = 0; iter < MAX; iter++) {
+      const completion: any = await chat({ model, messages, tools: subTools, stream: false, maxTokens: 4096 });
+      const msg = completion?.choices?.[0]?.message;
+      if (!msg) break;
+      messages.push(msg);
+      if (msg.content) final = msg.content;
+
+      const calls = msg.tool_calls || [];
+      if (calls.length === 0) break;
+
+      for (const call of calls) {
+        let toolArgs: Record<string, unknown> = {};
+        try { toolArgs = JSON.parse(call.function.arguments || "{}"); } catch {}
+        const r = await executeTool(call.function.name, toolArgs, { ...ctx, agentName: subType });
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: r.success ? r.output : `Error: ${r.error}`,
+        });
+      }
+    }
+
+    return { success: true, output: final || "(subagent finished without a summary)" };
+  } catch (err: any) {
+    return { success: false, output: "", error: `Task subagent failed: ${err.message}` };
+  }
+}
+
 // ============================================================================
 // Main Executor
 // ============================================================================
 
-export type ToolName = "Read" | "Edit" | "Write" | "Bash" | "Glob" | "Grep" | "List";
+export type ToolName = "Read" | "Edit" | "Write" | "MultiEdit" | "Bash" | "Glob" | "Grep" | "List" | "WebSearch" | "Task";
+
+// Canonical tool names keyed by lowercase, so multi-word names survive.
+const CANONICAL_TOOLS: Record<string, string> = {
+  read: "Read", edit: "Edit", write: "Write", multiedit: "MultiEdit",
+  bash: "Bash", glob: "Glob", grep: "Grep", list: "List",
+  websearch: "WebSearch", task: "Task",
+};
 
 export async function executeTool(
   name: ToolName | string,
   args: Record<string, unknown>,
   ctx: ToolExecutionContext
 ): Promise<ToolResult> {
-  // Normalize tool name (handle case variations)
-  const normalizedName = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+  // Resolve to a canonical tool name (preserves multi-word names like MultiEdit)
+  const normalizedName = CANONICAL_TOOLS[name.toLowerCase()] || name;
 
   // Validate agent permissions if agent is specified
   if (ctx.agentName) {
@@ -627,6 +800,9 @@ export async function executeTool(
         ctx
       );
 
+    case "MultiEdit":
+      return executeMultiEdit(args as { file_path: string; edits: StringEdit[] }, ctx);
+
     case "Write":
       return executeWrite(args as { file_path: string; content: string }, ctx);
 
@@ -642,11 +818,17 @@ export async function executeTool(
     case "List":
       return executeList(args as { path: string }, ctx);
 
+    case "WebSearch":
+      return executeWebSearch(args as { query: string });
+
+    case "Task":
+      return executeTask(args as { description: string; prompt: string; subagent_type: string }, ctx);
+
     default:
       return {
         success: false,
         output: "",
-        error: `Unknown tool: ${name}. Available tools: Read, Edit, Write, Bash, Glob, Grep, List`,
+        error: `Unknown tool: ${name}. Available tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, List, WebSearch, Task`,
       };
   }
 }

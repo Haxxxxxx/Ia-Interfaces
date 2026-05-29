@@ -557,6 +557,7 @@ export async function POST(req: NextRequest) {
                 projectRoot,
                 sessionId: instanceId || "default",
                 agentName, // Pass agent for permission validation
+                model, // Used by the Task tool to spawn subagents
                 onFileChange,
               });
 

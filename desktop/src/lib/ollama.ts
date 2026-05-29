@@ -1,0 +1,146 @@
+/**
+ * Direct Ollama client — talks straight to the local Ollama daemon.
+ * No Next.js server, no wifi. This is the offline brain's transport.
+ *
+ * Ollama exposes an OpenAI-compatible endpoint at /v1/chat/completions
+ * (supports tool calling for qwen2.5, llama3.1+, mistral, etc.) and a
+ * native API at /api/tags for model discovery.
+ */
+
+export const OLLAMA_URL = "http://localhost:11434";
+
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant" | "system" | "tool";
+  content: string | null;
+  reasoning_content?: string;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  name?: string;
+}
+
+export interface ChatChunk {
+  choices: {
+    delta: {
+      content?: string;
+      reasoning_content?: string;
+      tool_calls?: Array<{
+        index: number;
+        id?: string;
+        type?: "function";
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+    finish_reason?: string | null;
+  }[];
+  usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
+export interface OllamaModel {
+  name: string;
+  size: number;
+  family?: string;
+  parameterSize?: string;
+}
+
+/** Is the local Ollama daemon reachable? */
+export async function isOllamaUp(timeoutMs = 1500): Promise<boolean> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    const res = await fetch(`${OLLAMA_URL}/api/tags`, { signal: ctrl.signal });
+    clearTimeout(t);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** List locally installed models (works fully offline). */
+export async function listLocalModels(): Promise<OllamaModel[]> {
+  const res = await fetch(`${OLLAMA_URL}/api/tags`);
+  if (!res.ok) throw new Error(`Ollama returned ${res.status}`);
+  const data = await res.json();
+  return (data.models || []).map((m: any) => ({
+    name: m.name,
+    size: m.size ?? 0,
+    family: m.details?.family,
+    parameterSize: m.details?.parameter_size,
+  }));
+}
+
+// Models known to handle OpenAI-style function calling well under Ollama.
+const TOOL_CAPABLE = [
+  "qwen2.5", "qwen2", "qwq", "llama3.1", "llama3.2", "llama3.3",
+  "mistral", "mixtral", "command-r", "firefunction", "hermes", "granite",
+];
+
+export function modelSupportsTools(model: string): boolean {
+  const lower = model.toLowerCase();
+  return TOOL_CAPABLE.some((m) => lower.includes(m));
+}
+
+/**
+ * Stream a chat completion directly from Ollama.
+ * Yields OpenAI-compatible chunks (content + tool_call deltas).
+ */
+export async function* streamOllamaChat(
+  messages: ChatMessage[],
+  options: { model: string; tools?: unknown[]; temperature?: number; signal?: AbortSignal } = { model: "qwen2.5-coder:7b" }
+): AsyncGenerator<ChatChunk> {
+  const { model, tools, temperature = 0.3, signal } = options;
+
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    stream: true,
+    temperature,
+  };
+  // Only attach tools to models that can actually use them — avoids
+  // confusing models that ignore the field and emit JSON in content.
+  if (tools && tools.length > 0 && modelSupportsTools(model)) {
+    body.tools = tools;
+  }
+
+  const res = await fetch(`${OLLAMA_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Ollama error ${res.status}: ${txt.slice(0, 300)}`);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("No response body from Ollama");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (payload === "[DONE]") return;
+      try {
+        yield JSON.parse(payload) as ChatChunk;
+      } catch {
+        // partial/keepalive line — ignore
+      }
+    }
+  }
+}

@@ -1,13 +1,9 @@
 [package]
-name = "sadary-hub"
+name = "rodeo"
 version = "1.0.0"
-description = "Sadary LLM Hub Desktop Client"
-authors = ["Sadary"]
+description = "Rodeo — offline AI coding assistant"
+authors = ["Rodeo"]
 edition = "2021"
-
-[lib]
-name = "sadary_hub_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
