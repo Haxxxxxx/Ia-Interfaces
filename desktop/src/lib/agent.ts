@@ -75,6 +75,8 @@ export interface AgentCallbacks {
   onIteration?: (n: number) => void;
   /** Resolve true to run a mutating tool, false to deny. */
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
+  /** Answer an AskUser choice-question. Resolve with the user's selection. */
+  requestChoice?: (q: { question: string; options: string[]; header?: string; allowMultiple?: boolean }) => Promise<string>;
   /** Perf telemetry for the dashboard. */
   onTurnMetric?: (m: { model: string; ttftMs: number; durationMs: number; tokens: number; tokPerSec: number }) => void;
   onToolMetric?: (m: { toolName: string; durationMs: number; ok: boolean }) => void;
@@ -228,6 +230,25 @@ export async function runAgent(
     // Execute each tool call (read-only auto-runs; mutations need approval).
     for (const tc of toolCalls) {
       if (opts.signal?.aborted) return messages;
+
+      // AskUser → surface a choice prompt to the user (auto-answer when unattended).
+      if (tc.function.name === "AskUser") {
+        let qa: any = {};
+        try { qa = JSON.parse(tc.function.arguments || "{}"); } catch {}
+        cb.onToolStart?.(tc, `Question: ${qa.question || ""}`);
+        const answer = cb.requestChoice
+          ? await cb.requestChoice({
+              question: String(qa.question || "?"),
+              options: Array.isArray(qa.options) ? qa.options.map(String) : [],
+              header: qa.header ? String(qa.header) : undefined,
+              allowMultiple: !!qa.allowMultiple,
+            })
+          : "Running autonomously — make the best decision and proceed without asking.";
+        cb.onToolResult?.(tc, answer);
+        messages.push({ role: "tool", tool_call_id: tc.id, name: "AskUser", content: answer });
+        if (opts.signal?.aborted) return messages;
+        continue;
+      }
 
       const description = describeTool(tc);
       cb.onToolStart?.(tc, description);

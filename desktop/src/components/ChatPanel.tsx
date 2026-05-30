@@ -9,14 +9,19 @@ import { pickBestFittingModel, getTotalRamBytes, listLocalModels } from "../lib/
 import { ThinkingBlock } from "./ThinkingBlock";
 import { Markdown } from "./Markdown";
 import { ToolApproval } from "./ToolCallUI";
+import { AskUserCard } from "./AskUserCard";
+
+interface ChoiceReq { question: string; options: string[]; header?: string; allowMultiple?: boolean }
 
 export function ChatPanel() {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [status, setStatus] = useState("");
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
+  const [pendingChoice, setPendingChoice] = useState<ChoiceReq | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const approvalResolver = useRef<((v: boolean) => void) | null>(null);
+  const choiceResolver = useRef<((v: string) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const ctxCache = useRef<{ dir: string; ctx: string } | null>(null);
 
@@ -30,7 +35,7 @@ export function ChatPanel() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeInstance?.messages, pending]);
+  }, [activeInstance?.messages, pending, pendingChoice]);
 
   function requestApproval(req: ApprovalRequest): Promise<boolean> {
     return new Promise((resolve) => {
@@ -42,6 +47,19 @@ export function ChatPanel() {
     setPending(null);
     approvalResolver.current?.(v);
     approvalResolver.current = null;
+  }
+
+  function requestChoice(q: ChoiceReq): Promise<string> {
+    return new Promise((resolve) => {
+      setPendingChoice(q);
+      choiceResolver.current = resolve;
+    });
+  }
+  function resolveChoice(answer: string) {
+    setPendingChoice(null);
+    if (activeInstance) addMessage(activeInstance.id, { role: "user", content: answer });
+    choiceResolver.current?.(answer);
+    choiceResolver.current = null;
   }
 
   async function pickWorkingDir() {
@@ -212,6 +230,7 @@ export function ChatPanel() {
       onTurnMetric: (m) => addMetric({ id: crypto.randomUUID(), ts: Date.now(), kind: "turn", ...m }),
       onToolMetric: (m) => addMetric({ id: crypto.randomUUID(), ts: Date.now(), kind: "tool", ...m }),
       onToolResult: (tc, result) => {
+        if (tc.function.name === "AskUser") return; // the answer is shown as a user message
         addMessage(id, {
           role: "tool",
           content: result.length > 4000 ? result.slice(0, 4000) + "\n… (truncated)" : result,
@@ -219,6 +238,7 @@ export function ChatPanel() {
         });
       },
       requestApproval,
+      requestChoice,
     });
   }
 
@@ -242,6 +262,7 @@ export function ChatPanel() {
   function stop() {
     abortRef.current?.abort();
     resolveApproval(false);
+    if (choiceResolver.current) resolveChoice("(stopped)");
     setIsStreaming(false);
   }
 
@@ -346,7 +367,17 @@ export function ChatPanel() {
             />
           )}
 
-          {isStreaming && !pending && (
+          {pendingChoice && (
+            <AskUserCard
+              question={pendingChoice.question}
+              options={pendingChoice.options}
+              header={pendingChoice.header}
+              allowMultiple={pendingChoice.allowMultiple}
+              onAnswer={resolveChoice}
+            />
+          )}
+
+          {isStreaming && !pending && !pendingChoice && (
             <div className="flex items-center gap-2 text-terminal-muted text-sm">
               <span className="thinking-pulse">●</span>
               <span>{status || "Thinking…"}</span>

@@ -187,6 +187,23 @@ export const TOOL_SCHEMAS = [
   {
     type: "function",
     function: {
+      name: "AskUser",
+      description: "Ask the user a clarifying question WITH a few concrete options when you genuinely need a decision only they can make (which approach, which file, naming, scope, etc.). Always prefer this over an open-ended prose question. Do NOT use it for things you can find yourself with Read/Glob/Grep.",
+      parameters: {
+        type: "object",
+        required: ["question", "options"],
+        properties: {
+          question: { type: "string", description: "The question to ask" },
+          options: { type: "array", items: { type: "string" }, description: "2-4 concrete answer choices" },
+          header: { type: "string", description: "Short label for the question (optional)" },
+          allowMultiple: { type: "boolean", description: "Allow selecting more than one option" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "RememberProject",
       description: "Record a durable fact about THIS codebase to your project memory (.rodeo/memory.md): architecture, conventions, key files, gotchas, decisions. Call it whenever you learn something worth remembering for next time. Your memory is loaded into context every session.",
       parameters: {
@@ -242,6 +259,7 @@ Telling the user "run this command" or "I'll apply this change" or showing a \`\
 
 ## How you work
 - You have real tools. USE THEM. Never ask the user to paste code — read it yourself with Read/Glob/Grep.
+- When you need a decision from the user, call **AskUser** with concrete options instead of asking an open-ended question in prose. Only ask about things tools can't resolve.
 - When asked to understand a codebase, explore it: Glob for the file list, Read the main files (don't stop at one file), Grep for key symbols. THEN act.
 - After changing code, VERIFY with Bash (e.g. \`python -m py_compile\`, \`npx tsc --noEmit\`, \`npm test\`) and fix what you broke.
 - Make the smallest change that solves the problem. Match the surrounding code style.
