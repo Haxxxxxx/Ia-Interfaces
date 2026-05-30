@@ -123,7 +123,7 @@ export function ChatPanel() {
     setStatus(`Auditing with ${model}…`);
     addMessage(activeInstance.id, { role: "user", content: `🔍 Audit project (using ${model})` });
     try {
-      await runLocal(prompt, model);
+      await runLocal(prompt, { model });
     } catch (error) {
       addMessage(activeInstance.id, { role: "assistant", content: `Error: ${error instanceof Error ? error.message : String(error)}` });
     } finally {
@@ -132,7 +132,32 @@ export function ChatPanel() {
     }
   }
 
-  async function runLocal(userText: string, modelOverride?: string) {
+  async function runEnhance() {
+    if (!activeInstance || isStreaming) return;
+    if (mode !== "local") { setStatus("Enhance runs in local mode."); return; }
+    if (!ollamaUp) { setStatus("Ollama is offline."); return; }
+    if (!workingDirectory) { setStatus("Set a working directory first."); return; }
+
+    const model = pickStrongestModel(ollamaModels);
+    const prompt =
+      "Enhance this codebase end-to-end. First AUDIT: explore broadly (Glob the tree, Read 5-10+ key files) and identify the top 2-3 highest-impact improvements. " +
+      "Then IMPLEMENT them — actually make the changes with Edit/MultiEdit/Write (do not just propose code). After each change, verify it (read it back, or run a check with Bash). " +
+      "Finally, summarize exactly what you changed and why. Be specific to THIS code; make focused, correct changes.";
+
+    setIsStreaming(true);
+    setStatus(`Enhancing with ${model}…`);
+    addMessage(activeInstance.id, { role: "user", content: `✨ Enhance project (using ${model})` });
+    try {
+      await runLocal(prompt, { model, maxIterations: 30 });
+    } catch (error) {
+      addMessage(activeInstance.id, { role: "assistant", content: `Error: ${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setIsStreaming(false);
+      setStatus("");
+    }
+  }
+
+  async function runLocal(userText: string, opts: { model?: string; maxIterations?: number } = {}) {
     if (!ollamaUp) {
       addMessage(activeInstance!.id, {
         role: "assistant",
@@ -153,7 +178,7 @@ export function ChatPanel() {
     let reasoning = "";
     const id = activeInstance!.id;
 
-    await runAgent(history, { model: modelOverride || localModel, cwd: workingDirectory, autoApprove, signal: abort.signal }, {
+    await runAgent(history, { model: opts.model || localModel, cwd: workingDirectory, autoApprove, maxIterations: opts.maxIterations, signal: abort.signal }, {
       onIteration: (n) => setStatus(`Working… (step ${n})`),
       onContent: (delta) => {
         content += delta;
@@ -242,6 +267,14 @@ export function ChatPanel() {
           className="px-2.5 py-1 rounded border border-terminal-border hover:border-terminal-accent/50 hover:text-terminal-accent disabled:opacity-40 disabled:cursor-not-allowed"
         >
           🔍 Audit
+        </button>
+        <button
+          onClick={runEnhance}
+          disabled={isStreaming || mode !== "local" || !ollamaUp || !workingDirectory}
+          title="Audit then implement the top improvements (with approval)"
+          className="px-2.5 py-1 rounded border border-terminal-border hover:border-terminal-accent/50 hover:text-terminal-accent disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          ✨ Enhance
         </button>
       </div>
 

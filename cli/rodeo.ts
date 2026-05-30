@@ -10200,6 +10200,7 @@ ${c.bold}Integrations${c.reset}
 
 ${c.bold}Settings${c.reset}
   /audit [scope] Structured audit with your strongest model (auto-restores)
+  /enhance [scope] Audit then implement the top fixes (strongest model, with approval)
   /model <id>   Change model
   /models       List models
   /auto         Toggle auto-approve
@@ -10538,6 +10539,33 @@ Be specific to THIS code — no generic filler.`;
             await chat(auditPrompt);
           } finally {
             CONFIG.model = prevModel; // restore the user's model
+          }
+          break;
+        }
+
+        case "enhance": {
+          const scope = args.join(" ").trim();
+          const enhModels = await fetchAvailableModels();
+          const enhInstalled = enhModels.filter((m) => m.installed !== false).map((m) => m.id);
+          const enhScore = (m: string): number => {
+            const sz = m.match(/(\d+)\s*b/i);
+            if (sz) return parseInt(sz[1]);
+            if (/rodeo/i.test(m)) return 15;
+            return 8;
+          };
+          const enhUsable = enhInstalled.filter((m) => modelSupportsTools(m) && !/coder/i.test(m));
+          const enhPool = enhUsable.length ? enhUsable : enhInstalled;
+          const enhStrongest = enhPool.sort((a, b) => enhScore(b) - enhScore(a))[0] || CONFIG.model;
+          const enhPrev = CONFIG.model;
+          if (enhStrongest && enhStrongest !== enhPrev) {
+            CONFIG.model = enhStrongest;
+            console.log(`${c.dim}↳ enhancing with ${c.reset}${c.cyan}${enhStrongest}${c.reset}${c.dim} (restoring ${enhPrev} after)${c.reset}\n`);
+          }
+          const enhancePrompt = `Enhance ${scope || "this codebase"} end-to-end. First AUDIT: explore broadly (Glob the tree, Read 5-10+ key files) and find the top 2-3 highest-impact improvements. Then IMPLEMENT them — actually make the changes with Edit/MultiEdit/Write (do NOT just propose code). After each change, verify it (read it back, or run a check with Bash). Finally summarize exactly what you changed and why. Be specific to THIS code; make focused, correct changes.`;
+          try {
+            await chat(enhancePrompt);
+          } finally {
+            CONFIG.model = enhPrev; // restore the user's model
           }
           break;
         }
