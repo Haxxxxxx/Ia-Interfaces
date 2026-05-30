@@ -10029,6 +10029,135 @@ function printSessionEnd(): void {
   console.log(`${c.dim}  ${randomTip}${c.reset}\n`);
 }
 
+// Slash-command reference, rendered as aligned + colored columns.
+// Each item is [command, argHint, description]; argHint "" means no argument.
+const HELP_SECTIONS: { title: string; items: [string, string, string][] }[] = [
+  { title: "Core", items: [
+    ["/help", "", "Show this help"],
+    ["/clear", "", "Clear the conversation"],
+    ["/quit", "", "Exit (saves session)"],
+  ]},
+  { title: "Editing", items: [
+    ["/undo", "", "Undo the last edit"],
+    ["/rollback", "", "Undo ALL session changes"],
+    ["/changes", "", "Show every change made"],
+  ]},
+  { title: "Git", items: [
+    ["/git", "", "Status overview"],
+    ["/diff", "", "Show uncommitted changes"],
+    ["/commit", "", "Generate a commit message"],
+    ["/branch", "[x]", "List / switch branches"],
+    ["/log", "", "Recent commits"],
+    ["/stash", "[msg]", "Stash changes (pop/list/drop)"],
+    ["/stage", "[file]", "Stage files (. for all)"],
+    ["/unstage", "", "Unstage files"],
+    ["/pr", "", "Create a PR with AI description"],
+    ["/review", "[#]", "AI code review (PR# or changes)"],
+    ["/push", "", "Push to origin"],
+    ["/pull", "", "Pull latest"],
+  ]},
+  { title: "Agents", items: [
+    ["/plan", "", "Switch to Plan agent (read-only)"],
+    ["/build", "", "Switch to Build agent (full)"],
+    ["/go", "", "Execute plan & switch to Build"],
+    ["/agent", "", "Show current agent info"],
+  ]},
+  { title: "Explore", items: [
+    ["/map", "", "Codebase structure map"],
+    ["/explore", "", "Quick codebase overview"],
+    ["/deep", "[q]", "Deep analysis"],
+    ["/search", "<q>", "Search the web"],
+  ]},
+  { title: "Memory", items: [
+    ["/memory", "", "Project memory"],
+    ["/solutions", "", "View stored solutions"],
+    ["/remember", "<x>", "Save an insight"],
+    ["/todo", "[task]", "Add / list todos"],
+  ]},
+  { title: "Sessions", items: [
+    ["/sessions", "", "List sessions"],
+    ["/save", "[name]", "Save the conversation"],
+    ["/load", "<name>", "Load a conversation"],
+    ["/convs", "", "List saved conversations"],
+  ]},
+  { title: "Context", items: [
+    ["/related", "<f>", "Show related files"],
+    ["/context", "", "Project info & context file"],
+    ["/init-context", "", "Create a RODEO.md template"],
+  ]},
+  { title: "Images", items: [
+    ["/image", "<path>", "Analyze an image file"],
+    ["/screenshot", "", "Capture & analyze the screen"],
+    ["/ss", "-i", "Interactive screen selection"],
+    ["/paste", "", "Analyze a clipboard image"],
+  ]},
+  { title: "Development", items: [
+    ["/test", "[file]", "Run tests"],
+    ["/bench", "", "Show response times"],
+    ["/rename", "", "Rename a symbol codebase-wide"],
+    ["/replace", "", "Global search / replace"],
+  ]},
+  { title: "Audit & Models", items: [
+    ["/audit", "[scope]", "Structured audit (strongest model)"],
+    ["/enhance", "[scope]", "Audit + implement top fixes"],
+    ["/model", "<id>", "Change model"],
+    ["/models", "", "List available models"],
+  ]},
+  { title: "Toggles", items: [
+    ["/auto", "", "Auto-approve safe operations"],
+    ["/compact", "", "Compact output"],
+    ["/speed", "", "Speed mode"],
+    ["/autosave", "", "Auto-save on exit"],
+  ]},
+  { title: "Integrations", items: [
+    ["/mcp", "", "MCP server connections"],
+    ["/figma", "", "Figma design integration"],
+    ["/hooks", "", "Pre / post execution hooks"],
+  ]},
+  { title: "System", items: [
+    ["/gpu", "", "GPU & Ollama status"],
+    ["/setup", "", "Shadow cloud setup guide"],
+    ["/shadow", "<url>", "Connect to Shadow cloud"],
+    ["/ollama", "<url>", "Set a custom Ollama URL"],
+  ]},
+];
+
+function printHelp(): void {
+  // One uniform left-column width across every section so descriptions line up.
+  const visible = ([cmd, arg]: [string, string, string]) => cmd.length + (arg ? arg.length + 1 : 0);
+  const width = Math.max(...HELP_SECTIONS.flatMap((s) => s.items.map(visible)));
+
+  const row = ([cmd, arg, desc]: [string, string, string]): string => {
+    const pad = " ".repeat(Math.max(0, width - visible([cmd, arg, desc])));
+    const left = `${c.cyan}${cmd}${c.reset}${arg ? ` ${c.dim}${arg}${c.reset}` : ""}`;
+    return `  ${left}${pad}   ${c.gray}${desc}${c.reset}`;
+  };
+
+  const out: string[] = [`\n${c.orange}${c.bold}RODEO${c.reset} ${c.dim}· command reference${c.reset}`];
+  for (const sec of HELP_SECTIONS) {
+    out.push(`\n${c.orange}${sec.title}${c.reset}`);
+    for (const item of sec.items) out.push(row(item));
+  }
+
+  // Keyboard + tips render in their own shape.
+  out.push(`\n${c.orange}Keyboard${c.reset}`);
+  const keys: [string, string][] = [
+    ["Ctrl+C", "Cancel the current request"],
+    ["Ctrl+C ×2", "Exit (saves session)"],
+    ["↑ / ↓", "Navigate history"],
+    ["Tab", "Auto-complete commands"],
+  ];
+  const kw = Math.max(...keys.map((k) => k[0].length));
+  for (const [k, d] of keys) out.push(`  ${c.yellow}${k.padEnd(kw)}${c.reset}   ${c.gray}${d}${c.reset}`);
+
+  out.push(
+    `\n${c.dim}New session: ${c.reset}${c.cyan}rodeo --new <name>${c.reset}   ` +
+    `${c.dim}Resume: ${c.reset}${c.cyan}rodeo --resume${c.reset}`,
+    ""
+  );
+  console.log(out.join("\n"));
+}
+
 // Print startup tips
 function printStartupTip(): void {
   const tips = [
@@ -10295,106 +10424,7 @@ ${c.dim}└${c.reset} ${c.bold}Path${c.reset}      ${c.dim}${truncate(process.cw
 
         case "help":
         case "h":
-          console.log(`
-${c.bold}Commands${c.reset}
-  /help         Show this help
-  /quit         Exit
-  /clear        Clear conversation
-
-${c.bold}Editing${c.reset}
-  /undo         Undo last edit
-  /rollback     Undo ALL session changes
-  /changes      Show all changes made
-
-${c.bold}Git${c.reset}
-  /git          Git status overview
-  /diff         Show uncommitted changes
-  /commit       Generate commit message
-  /branch [x]   List/switch branches
-  /log          Recent commits
-  /stash [msg]  Stash changes (pop/list/drop)
-  /stage [file] Stage files (or . for all)
-  /unstage      Unstage files
-  /pr           Create PR with AI description
-  /review [#]   AI code review (PR# or changes)
-  /push         Push to origin
-  /pull         Pull latest
-
-${c.bold}Agents${c.reset}
-  /plan         Switch to Plan agent (read-only)
-  /build        Switch to Build agent (full)
-  /go           Execute plan & switch to Build
-  /agent        Show current agent info
-
-${c.bold}Explore${c.reset}
-  /map          Codebase structure map
-  /explore      Quick codebase overview
-  /deep [q]     Deep analysis
-  /search <q>   Search the web
-
-${c.bold}Memory${c.reset}
-  /memory       Project memory
-  /solutions    View stored solutions
-  /remember <x> Save insight
-  /todo [task]  Add/list todos
-
-${c.bold}Sessions${c.reset}
-  /sessions     List sessions
-  /save [name]  Save conversation
-  /load <name>  Load conversation
-  /convs        List saved conversations
-  ${c.dim}New instance: rodeo --new <name>${c.reset}
-
-${c.bold}Context${c.reset}
-  /related <f>  Show related files
-  /context      Show project info & context file
-  /init-context Create RODEO.md template
-
-${c.bold}Images${c.reset}
-  /image <path> Analyze an image file
-  /screenshot   Capture & analyze screen
-  /ss -i        Interactive selection
-  /paste        Analyze clipboard image
-
-${c.bold}Development${c.reset}
-  /test [file]  Run tests
-  /bench        Show response times
-  /rename       Rename symbol in codebase
-  /replace      Global search/replace
-
-${c.bold}Integrations${c.reset}
-  /mcp          MCP server connections
-  /figma        Figma design integration
-  /hooks        Pre/post execution hooks
-
-${c.bold}Settings${c.reset}
-  /audit [scope] Structured audit with your strongest model (auto-restores)
-  /enhance [scope] Audit then implement the top fixes (strongest model, with approval)
-  /model <id>   Change model
-  /models       List models
-  /auto         Toggle auto-approve
-  /compact      Toggle compact output
-  /speed        Toggle speed mode
-  /autosave     Toggle auto-save on exit
-
-${c.bold}System${c.reset}
-  /gpu          Show GPU & Ollama status
-  /setup        Shadow cloud setup guide
-  /shadow <url> Connect to Shadow cloud
-  /ollama <url> Set custom Ollama URL
-
-${c.bold}Keyboard${c.reset}
-  Ctrl+C        Cancel current request
-  Ctrl+C x2     Exit (saves session)
-  ↑ / ↓         Navigate history
-  Tab           Auto-complete commands
-
-${c.bold}Tips${c.reset}
-  ${c.dim}• Use /plan for complex tasks before editing${c.reset}
-  ${c.dim}• /speed mode for faster responses${c.reset}
-  ${c.dim}• rodeo --new <name> for parallel sessions${c.reset}
-  ${c.dim}• rodeo --resume to continue last session${c.reset}
-`);
+          printHelp();
           break;
 
         case "clear":
