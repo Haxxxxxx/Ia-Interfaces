@@ -7,6 +7,7 @@ import { executeTool, getSandboxPath, FileChange, getToolsForAgent } from "@/lib
 import { trackChange, isPlanMode } from "@/lib/session-state";
 import { getProjectMemory, formatMemoryForPrompt } from "@/lib/project-memory";
 import { getAgent, AGENTS } from "@/lib/agents";
+import { getModelById } from "@/lib/models";
 import { generateSystemPrompt } from "@/lib/agent-prompts";
 import type OpenAI from "openai";
 
@@ -231,7 +232,19 @@ export async function POST(req: NextRequest) {
   }
 
   // Filter tools based on agent permissions (unless client explicitly provides tools)
-  const tools = clientTools || getToolsForAgent(agentName, TOOLS);
+  let tools = clientTools || getToolsForAgent(agentName, TOOLS);
+
+  // Capability gate: if we KNOW this model and it lacks tool calling (e.g. a
+  // vision-only model with a 2048 context), don't run the agentic loop or ship
+  // the ~6KB tools array — the model would never emit tool calls, just burn
+  // iterations and risk overflowing its tiny context. Unknown/unregistered
+  // models are left untouched (assumed capable so we never disable a real one).
+  const modelInfo = getModelById(model);
+  let effectiveAgentic = agentic;
+  if (modelInfo && !modelInfo.capabilities.includes("tool_calling")) {
+    effectiveAgentic = false;
+    tools = undefined;
+  }
 
   // Get project memory if available
   let memoryContext: string | null = null;
@@ -263,8 +276,8 @@ export async function POST(req: NextRequest) {
         ...clientMessages,
       ];
 
-  // 5. Non-agentic mode: simple proxy
-  if (!agentic || !stream) {
+  // 5. Non-agentic mode: simple proxy (also the fallback for non-tool models)
+  if (!effectiveAgentic || !stream) {
     try {
       const response = await chat({
         model,
