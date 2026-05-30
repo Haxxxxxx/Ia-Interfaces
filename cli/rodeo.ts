@@ -2949,6 +2949,33 @@ Topics: ${summaryParts.slice(0, 5).join("; ")}
   return [systemPrompt, summaryMessage, ...recentMessages];
 }
 
+/**
+ * Cheap, NON-destructive context shedding: replace the bulky content of OLD
+ * tool results (file reads, greps) with a compact stub, keeping the most recent
+ * `keepFull` results intact (the live working set). A long session otherwise
+ * re-sends every file it ever read on every single turn, which slows inference
+ * and overflows the window. Structure (role / tool_call_id) is never touched, so
+ * the assistant↔tool pairing stays valid; the model can re-run a tool if needed.
+ */
+function elideStaleToolResults(msgs: Message[], keepFull = 6): { msgs: Message[]; elided: number } {
+  const toolIdx: number[] = [];
+  msgs.forEach((m, i) => { if (m.role === "tool") toolIdx.push(i); });
+  const staleCount = toolIdx.length - keepFull;
+  if (staleCount <= 0) return { msgs, elided: 0 };
+
+  const staleSet = new Set(toolIdx.slice(0, staleCount));
+  let elided = 0;
+  const out = msgs.map((m, i) => {
+    if (!staleSet.has(i) || typeof m.content !== "string") return m;
+    const plain = m.content.replace(/\x1b\[[0-9;]*m/g, "");
+    if (plain.length <= 600 || plain.startsWith("[elided")) return m;
+    elided++;
+    const lines = plain.split("\n").length;
+    return { ...m, content: `[elided tool result — ${plain.length} chars, ${lines} lines; re-run the tool if you need this again]` };
+  });
+  return { msgs: out, elided };
+}
+
 // ============================================
 // MEMORY - Persist context across sessions
 // ============================================
@@ -9697,8 +9724,21 @@ async function chat(userInput: string): Promise<void> {
   updateContextUsage(messages);
   checkContextWarning();
 
-  // Compress context if getting long (extends effective context window)
-  const compressedMessages = await compressContext(messages);
+  // 1) Cheap, non-destructive: stub out stale tool results (old file reads) so
+  //    we don't re-send every byte ever read on every turn. Works even on short
+  //    conversations where a couple of big reads blow the budget.
+  const eli = elideStaleToolResults(messages);
+  if (eli.elided > 0) {
+    console.log(`${c.dim}(elided ${eli.elided} stale tool result${eli.elided > 1 ? "s" : ""})${c.reset}`);
+    messages.length = 0;
+    messages.push(...eli.msgs);
+    updateContextUsage(messages);
+  }
+
+  // 2) Compress (summarize) old messages when the conversation is long OR the
+  //    token budget is past 75% — not just at a fixed message count.
+  const overBudget = estimatedContextUsage > getContextBudget() * 0.75;
+  const compressedMessages = await compressContext(messages, overBudget);
   if (compressedMessages.length < messages.length) {
     console.log(`${c.dim}(compressed ${messages.length - compressedMessages.length} old messages)${c.reset}`);
     messages.length = 0;
