@@ -5427,6 +5427,12 @@ function generateDiff(
     return highlighted;
   };
 
+  // Render one side of a diff: a bold colored +/- marker and line number, a dim
+  // gutter, then the line content SYNTAX-HIGHLIGHTED so changed code stays
+  // readable (delta/bat style — the marker carries the add/remove signal).
+  const diffSide = (sign: string, ln: string, content: string, color: string): string =>
+    `${color}${c.bold}${sign}${c.reset} ${color}${ln}${c.reset} ${c.dim}│${c.reset} ${highlightLine(content)}`;
+
   // Get context lines if file content is available
   const contextLines = 2;
   let beforeContext: string[] = [];
@@ -5456,32 +5462,27 @@ function generateDiff(
     result.push(`${c.red}- ${ln} │ ${oldHighlighted}${c.reset}`);
     result.push(`${c.green}+ ${ln} │ ${newHighlighted}${c.reset}`);
   } else {
-    // Multi-line: show line-by-line with word highlighting where possible
-    const minLen = Math.min(oldLines.length, newLines.length);
-
-    // Lines that can be compared
-    for (let i = 0; i < minLen; i++) {
-      const ln = (lineNumber + i).toString().padStart(lineNumWidth, " ");
-      if (oldLines[i] === newLines[i]) {
-        // Unchanged line in the middle
-        result.push(`${c.dim}  ${ln} │ ${oldLines[i]}${c.reset}`);
-      } else {
-        const { oldHighlighted, newHighlighted } = highlightWordDiff(oldLines[i], newLines[i]);
-        result.push(`${c.red}- ${ln} │ ${oldHighlighted}${c.reset}`);
-        result.push(`${c.green}+ ${ln} │ ${newHighlighted}${c.reset}`);
-      }
+    // Multi-line: classic unified grouping — all removed lines, then all added
+    // lines, each syntax-highlighted. (Positional word-diff misaligns on
+    // insertions/deletions, so grouping reads more honestly.) Identical leading
+    // lines stay as dim context instead of a noisy -/+ pair.
+    let lead = 0;
+    while (lead < oldLines.length && lead < newLines.length && oldLines[lead] === newLines[lead]) {
+      const ln = (lineNumber + lead).toString().padStart(lineNumWidth, " ");
+      result.push(`${c.dim}  ${ln} │ ${highlightLine(oldLines[lead])}${c.reset}`);
+      lead++;
     }
 
-    // Extra removed lines
-    for (let i = minLen; i < oldLines.length; i++) {
+    // Removed lines
+    for (let i = lead; i < oldLines.length; i++) {
       const ln = (lineNumber + i).toString().padStart(lineNumWidth, " ");
-      result.push(`${c.red}- ${ln} │ ${oldLines[i]}${c.reset}`);
+      result.push(diffSide("-", ln, oldLines[i], c.red));
     }
 
-    // Extra added lines
-    for (let i = minLen; i < newLines.length; i++) {
+    // Added lines
+    for (let i = lead; i < newLines.length; i++) {
       const ln = (lineNumber + i).toString().padStart(lineNumWidth, " ");
-      result.push(`${c.green}+ ${ln} │ ${newLines[i]}${c.reset}`);
+      result.push(diffSide("+", ln, newLines[i], c.green));
     }
   }
 
