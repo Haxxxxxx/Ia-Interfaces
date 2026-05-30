@@ -4782,14 +4782,37 @@ const types = new Set([
   "i32", "i64", "u32", "u64", "f32", "f64", "usize", "String", "Vec", "Option",
 ]);
 
+// Languages where '#' starts a line comment (vs. JS private fields, CSS hex, etc.)
+const HASH_COMMENT_LANGS = new Set([
+  "python", "py", "bash", "sh", "shell", "zsh", "ruby", "rb", "yaml", "yml",
+  "toml", "makefile", "dockerfile", "r", "perl", "ini", "conf",
+]);
+// Languages that DON'T use '//' line comments (so we don't mangle their syntax).
+const NO_SLASH_COMMENT_LANGS = new Set([
+  "python", "py", "ruby", "rb", "yaml", "yml", "toml", "bash", "sh", "shell",
+  "zsh", "ini", "conf", "makefile", "r", "perl",
+]);
+
 function highlightCode(code: string, lang: string): string {
-  // Simple tokenizer for syntax highlighting
+  // Simple tokenizer for syntax highlighting (language-aware comments)
+  const l = (lang || "").toLowerCase();
+  const hashComment = HASH_COMMENT_LANGS.has(l);
+  const slashComment = !NO_SLASH_COMMENT_LANGS.has(l); // default on for c-like + unknown
   let result = "";
   let i = 0;
 
   while (i < code.length) {
-    // Comments
-    if (code.slice(i, i + 2) === "//" || code[i] === "#") {
+    // Block comments /* ... */ (c-like, css)
+    if (slashComment && code.slice(i, i + 2) === "/*") {
+      const end = code.indexOf("*/", i + 2);
+      const seg = end === -1 ? code.slice(i) : code.slice(i, end + 2);
+      result += `${syntaxColors.comment}${seg}${c.reset}`;
+      i += seg.length;
+      continue;
+    }
+
+    // Line comments — // for c-like, # for hash-comment languages only
+    if ((slashComment && code.slice(i, i + 2) === "//") || (hashComment && code[i] === "#")) {
       const end = code.indexOf("\n", i);
       const comment = end === -1 ? code.slice(i) : code.slice(i, end);
       result += `${syntaxColors.comment}${comment}${c.reset}`;
@@ -4910,24 +4933,25 @@ function formatMarkdown(text: string): string {
     // Code blocks - Claude Code exact style (minimal, just syntax highlighting)
     if (line.startsWith("```")) {
       if (inCodeBlock) {
-        // End code block
+        // End code block — frame it as a panel: corner + lang chip, left bar
+        // on every line, closing corner. Reads clearly as code, not prose.
         const code = codeBuffer.join("\n");
         const highlighted = highlightCode(code, codeBlockLang);
-        // Claude Code style: no box, just indented code with highlighting
+        const bar = `${c.dim}│${c.reset}`;
+        const chip = codeBlockLang ? ` ${c.orange}${codeBlockLang}${c.reset}` : ` ${c.dim}code${c.reset}`;
+        result.push(`${c.dim}╭─${c.reset}${chip}`);
         highlighted.split("\n").forEach(codeLine => {
-          result.push(`  ${codeLine}`);
+          result.push(`${bar} ${codeLine}`);
         });
+        result.push(`${c.dim}╰─${c.reset}`);
         result.push(""); // Blank line after code block
         inCodeBlock = false;
         codeBuffer = [];
         codeBlockLang = "";
       } else {
-        // Start code block
+        // Start code block (the panel is rendered when it closes)
         inCodeBlock = true;
         codeBlockLang = line.slice(3).trim();
-        if (codeBlockLang) {
-          result.push(`${c.dim}${codeBlockLang}${c.reset}`);
-        }
       }
       continue;
     }
