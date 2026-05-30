@@ -48,7 +48,15 @@ export async function runAgent(
   cb: AgentCallbacks = {}
 ): Promise<ChatMessage[]> {
   let lastSignature = "";
+  let nudges = 0;        // times we've forced "stop narrating, use a tool"
+  let toolsUsed = false; // whether any tool ran this task
   const maxIter = opts.maxIterations ?? MAX_ITERATIONS;
+
+  // Did the latest user turn ask Rodeo to actually DO something (vs. explain)?
+  const lastUser = [...messages].reverse().find((m) => m.role === "user" && typeof m.content === "string")?.content as string || "";
+  const actionRequested =
+    /\b(add|edit|implement|fix|create|write|change|update|build|refactor|rename|remove|delete|enhance|make|wire|set up|integrate)\b/i.test(lastUser) ||
+    /\b(yourself|edit the code|do it|implement it|edit the actual|go ahead|proceed)\b/i.test(lastUser);
 
   for (let iter = 0; iter < maxIter; iter++) {
     cb.onIteration?.(iter + 1);
@@ -119,8 +127,20 @@ export async function runAgent(
     messages.push(assistantMsg);
     cb.onAssistantTurn?.(content, toolCalls);
 
-    // No tools → the model is done talking.
+    // No tools this turn. If the user asked for an action and the model just
+    // narrated/proposed code instead of editing, force it to actually act.
     if (toolCalls.length === 0 || finishReason === "stop") {
+      const proposedCode = /```/.test(content);
+      const shouldHaveActed = actionRequested && (proposedCode || !toolsUsed);
+      if (shouldHaveActed && nudges < 2 && !opts.signal?.aborted) {
+        nudges++;
+        messages.push({
+          role: "system",
+          content:
+            "STOP — you did not call any tool, so NOTHING changed. Writing code or steps in your message does not edit files. The user asked you to make the change. Right now: Read the target file if you haven't, then call Edit / MultiEdit / Write (or Bash) with the ACTUAL change. Do not explain, propose, apologize, or show code in prose — emit the tool call this turn.",
+        });
+        continue;
+      }
       return messages;
     }
 
@@ -135,6 +155,7 @@ export async function runAgent(
       return messages;
     }
     lastSignature = signature;
+    toolsUsed = true;
 
     // Execute each tool call (read-only auto-runs; mutations need approval).
     for (const tc of toolCalls) {

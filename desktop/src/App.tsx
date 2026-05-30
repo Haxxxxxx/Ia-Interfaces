@@ -94,6 +94,7 @@ function App() {
     return () => { clearTimeout(t); clearInterval(iv); };
   }, []);
 
+
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {

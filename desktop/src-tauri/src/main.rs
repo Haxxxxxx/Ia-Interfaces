@@ -96,6 +96,16 @@ fn start_ollama() -> Result<String, String> {
     Ok("Ollama starting".to_string())
 }
 
+/// Unload all loaded Ollama models so VRAM frees the moment the app closes
+/// (Ollama otherwise keeps them ~5 min). Runs synchronously; sets a full PATH
+/// so the `ollama` binary is found under the stripped GUI-app environment.
+fn unload_ollama_models() {
+    let _ = Command::new("sh")
+        .arg("-c")
+        .arg("export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin\"; ollama ps 2>/dev/null | awk 'NR>1{print $1}' | xargs -I{} ollama stop {} >/dev/null 2>&1")
+        .status();
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -103,6 +113,15 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        .on_window_event(|_window, event| {
+            // Close button → CloseRequested; Cmd+Q tears the window down → Destroyed.
+            match event {
+                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                    unload_ollama_models();
+                }
+                _ => {}
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             read_file,
             write_file,
@@ -111,6 +130,15 @@ fn main() {
             search_files,
             start_ollama,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // Catch every exit path (incl. Cmd+Q, which skips ExitRequested).
+            match event {
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    unload_ollama_models();
+                }
+                _ => {}
+            }
+        });
 }

@@ -9453,6 +9453,10 @@ async function chat(userInput: string): Promise<void> {
   let iterations = 0;
   const maxIterations = 15; // Allow more iterations for complex tasks (like Claude Code)
   let totalToolCalls = 0;
+  let nudgeCount = 0; // times we've forced "use a tool instead of narrating"
+  const actionRequested =
+    /\b(add|edit|implement|fix|create|write|change|update|build|refactor|rename|remove|delete|enhance|make|wire|integrate)\b/i.test(userInput) ||
+    /\b(yourself|edit the code|do it|implement it|edit the actual|go ahead|proceed)\b/i.test(userInput);
 
   while (continueLoop && iterations < maxIterations) {
     iterations++;
@@ -9633,8 +9637,21 @@ async function chat(userInput: string): Promise<void> {
           }
         }
 
-        // Claude Code style: no timing after text responses
-        continueLoop = false;
+        // If the user asked for an edit but the model only narrated/proposed code
+        // without calling a tool, force it to actually act (not in read-only plan mode).
+        const proposedCode = /```/.test(content || "");
+        if (currentAgent !== "plan" && actionRequested && (proposedCode || totalToolCalls === 0) && nudgeCount < 2) {
+          nudgeCount++;
+          messages.push({
+            role: "system",
+            content: "STOP — you did not call any tool, so nothing changed. Writing code or steps in your message does NOT edit files. The user asked you to make the change. Read the target file if needed, then call Edit / Write / Bash NOW with the actual change. Do not explain, propose, or show code in prose — emit the tool call.",
+          });
+          console.log(`${c.dim}↳ no edit was made — retrying with action${c.reset}`);
+          continueLoop = true;
+        } else {
+          // Claude Code style: no timing after text responses
+          continueLoop = false;
+        }
       }
     } catch (error: any) {
       stopSpinner();
