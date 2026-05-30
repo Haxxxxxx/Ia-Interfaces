@@ -9913,11 +9913,8 @@ function printBanner(): void {
 async function printSystemStatus(): Promise<void> {
   const gpu = await detectGpuInfo();
   const gpuStatus = formatGpuStatus(gpu);
-
-  // Visual separator
-  console.log(`\n${c.dim}┌${"─".repeat(50)}${c.reset}`);
-  console.log(`${c.dim}│${c.reset} ${gpuStatus}`);
-  console.log(`${c.dim}└${"─".repeat(50)}${c.reset}`);
+  // Clean single line, indented to sit under the banner.
+  console.log(`\n  ${gpuStatus}`);
 }
 
 // Print session end summary
@@ -9934,7 +9931,7 @@ function printSessionEnd(): void {
   if (undoStack.length > 0) stats.push(`${undoStack.length} undos available`);
 
   if (stats.length > 0) {
-    console.log(`${c.purple}✦${c.reset} ${stats.join(" ${c.dim}·${c.reset} ")}`);
+    console.log(`${c.purple}✦${c.reset} ${stats.join(` ${c.dim}·${c.reset} `)}`);
   }
 
   console.log(`${c.dim}  Session ended${c.reset}`);
@@ -9996,12 +9993,18 @@ async function main() {
   const contextBudget = getContextBudget();
   const contextDisplay = `${Math.round(contextBudget / 1000)}k tokens`;
 
+  // Extra signals: mode, tool-calling, and whether project memory exists.
+  const modeLabel = CONFIG.local ? "local · offline" : `server (${CONFIG.apiUrl.replace(/^https?:\/\//, "")})`;
+  const toolsLabel = modelSupportsTools(CONFIG.model) ? "tools" : "no tool-calling";
+  const hasMemory = fs.existsSync(path.join(process.cwd(), ".rodeo", "memory.md"));
+  void timeStr;
+
   console.log(`
-${c.purple}◆${c.reset} ${c.bold}Model${c.reset}     ${c.cyan}${CONFIG.model}${c.reset}${sessionInfo}
-${c.dim}├${c.reset} ${c.bold}Context${c.reset}   ${c.green}${contextDisplay}${c.reset}
+${c.purple}◆${c.reset} ${c.bold}Model${c.reset}     ${c.cyan}${CONFIG.model}${c.reset}  ${c.dim}· ${modeLabel}${c.reset}${sessionInfo}
+${c.dim}├${c.reset} ${c.bold}Context${c.reset}   ${c.green}${contextDisplay}${c.reset}  ${c.dim}· ${toolsLabel}${c.reset}
 ${c.dim}├${c.reset} ${c.bold}Project${c.reset}   ${projectType || `${c.dim}Unknown${c.reset}`}${rootDisplay}
-${c.dim}├${c.reset} ${c.bold}Path${c.reset}      ${c.dim}${truncate(process.cwd(), 50)}${c.reset}
-${c.dim}└${c.reset} ${c.bold}Time${c.reset}      ${c.dim}${timeStr}${c.reset}
+${c.dim}├${c.reset} ${c.bold}Memory${c.reset}    ${hasMemory ? `${c.green}loaded${c.reset} ${c.dim}(.rodeo/memory.md)${c.reset}` : `${c.dim}none yet — Rodeo learns as you work${c.reset}`}
+${c.dim}└${c.reset} ${c.bold}Path${c.reset}      ${c.dim}${truncate(process.cwd(), 50)}${c.reset}
 `);
 
   // Warn if project root seems incorrect (home directory without project structure)
