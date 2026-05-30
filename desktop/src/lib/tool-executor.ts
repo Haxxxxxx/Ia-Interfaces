@@ -15,6 +15,8 @@ const DANGEROUS_BASH: RegExp[] = [
   /\bgit\s+push\b/i,
   /\bgit\s+reset\s+--hard\b/i,
   /\bgit\s+clean\s+-[a-z]*f/i,
+  /\bgit\s+checkout\s+(--\s+)?\.(\s|$)/i,        // discards ALL uncommitted changes
+  /\bgit\s+restore\b[^|\n]*\s\.(\s|$)/i,         // git restore [flags] . — same
   /\b(curl|wget)\b[^\n|]*\|\s*(sh|bash|zsh)\b/i,
   /\b\/dev\/(sda|disk\d|nvme|rdisk)/i,
   /:\(\)\s*\{[^}]*\}\s*;\s*:/, // fork bomb
