@@ -6922,6 +6922,84 @@ function formatToolArgs(normalizedName: string, args: Record<string, any>): stri
   }
 }
 
+// Strip ANSI color codes so we can measure / detect pre-colored results.
+function stripAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/**
+ * Render a tool result Claude-Code style: a `⎿` tree branch hanging off the
+ * `● Tool args` line, with the body indented + dimmed underneath. Read-type
+ * tools collapse to a one-line summary (we don't splatter a whole file under
+ * every Read); the full text is still returned to the model untouched.
+ */
+function printToolResult(normalizedName: string, result: string): void {
+  const branch = `${c.dim}  ⎿ ${c.reset}`;
+  const indent = "    "; // body lines align under the branch glyph
+  const trimmed = result.replace(/\s+$/, "");
+
+  if (!trimmed) {
+    console.log(`${branch}${c.dim}(no output)${c.reset}`);
+    return;
+  }
+
+  const isError = /^\x1b\[[0-9;]*m?Error:|Error:|not found|✗/.test(stripAnsi(trimmed).slice(0, 40)) || /Error:|not found/.test(stripAnsi(trimmed));
+  const lines = trimmed.split("\n");
+  const hasAnsi = /\x1b\[/.test(trimmed);
+  const paint = (s: string) => (hasAnsi ? s : `${c.dim}${s}${c.reset}`);
+
+  // One-line summaries for read/search tools — the body is noise on screen.
+  const n = lines.length;
+  const plural = (k: number, w: string) => `${k} ${w}${k === 1 ? "" : "s"}`;
+  let summary: string | null = null;
+  let bodyMax = 14; // how many body lines we'll show under the summary
+  if (!isError) {
+    switch (normalizedName) {
+      case "read_file":
+        summary = `Read ${plural(n, "line")}`;
+        bodyMax = 0; // file content already lives in context; don't echo it
+        break;
+      case "search_files": {
+        const files = lines.filter((l) => l.trim() && !/^No files|^Found/.test(l));
+        summary = `Found ${plural(files.length, "file")}`;
+        bodyMax = 8;
+        break;
+      }
+      case "grep": {
+        summary = `${n} match${n === 1 ? "" : "es"}`;
+        bodyMax = 8;
+        break;
+      }
+      case "list_directory": {
+        summary = `${plural(n, "item")}`;
+        bodyMax = 10;
+        break;
+      }
+    }
+  }
+
+  if (summary) {
+    console.log(`${branch}${c.gray}${summary}${c.reset}`);
+    if (bodyMax > 0) {
+      const body = lines.slice(0, bodyMax);
+      const overflow = n - body.length;
+      for (const line of body) console.log(`${indent}  ${paint(line)}`);
+      if (overflow > 0) console.log(`${indent}  ${c.dim}… +${plural(overflow, "line")}${c.reset}`);
+    }
+    return;
+  }
+
+  // No summary (Bash / Edit / Write / errors / misc): show the body under the branch.
+  const max = isError ? 20 : 14;
+  const body = lines.slice(0, max);
+  const overflow = n - body.length;
+  body.forEach((line, i) => {
+    const prefix = i === 0 ? branch : `${indent}  `;
+    console.log(`${prefix}${paint(line)}`);
+  });
+  if (overflow > 0) console.log(`${indent}  ${c.dim}… +${plural(overflow, "line")}${c.reset}`);
+}
+
 // Normalize tool name to internal name (handles Claude Code-style names)
 function normalizeToolName(name: string): string {
   const map: Record<string, string> = {
@@ -8297,17 +8375,8 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
       }
   }
 
-  // Show result with line limit (Claude Code style - no box, just content)
-  const resultLines = result.split("\n");
-  const maxLines = 40;
-
-  if (resultLines.length > maxLines) {
-    // Show first portion with truncation indicator
-    console.log(resultLines.slice(0, maxLines).join("\n"));
-    console.log(`${c.dim}... ${resultLines.length - maxLines} more lines${c.reset}`);
-  } else {
-    console.log(result);
-  }
+  // Show result as a ⎿ tree branch hanging off the tool call (Claude Code style).
+  printToolResult(normalizedName, result);
 
   // Add recovery instruction on errors to prevent asking user for help
   if (result.includes("Error:") || result.includes("not found")) {
