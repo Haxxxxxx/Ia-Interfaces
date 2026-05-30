@@ -361,7 +361,12 @@ export async function POST(req: NextRequest) {
       let totalCachedTokens = 0;
       let agenticMessages = [...messages];
       let hasToolCalls = true;
-      let lastToolCallIds = new Set<string>();
+      // Loop detection: count consecutive identical tool-call signatures rather
+      // than comparing only to the previous iteration. Tolerates a legitimate
+      // re-read after an edit (the verify pattern) and catches it on the 3rd
+      // identical repeat instead of the 1st.
+      let lastSignature = "";
+      let repeatCount = 0;
 
       // File change handler for undo tracking
       const onFileChange = (change: FileChange) => {
@@ -511,22 +516,24 @@ export async function POST(req: NextRequest) {
             break;
           }
 
-          // Loop detection - check if same tool calls as last iteration
-          const currentToolCallIds = new Set(toolCalls.map(tc => `${tc.name}:${tc.arguments}`));
-          if (
-            currentToolCallIds.size === lastToolCallIds.size &&
-            Array.from(currentToolCallIds).every(id => lastToolCallIds.has(id))
-          ) {
-            // Same tool calls as before - likely stuck in a loop
+          // Loop detection - break only after the SAME batch repeats 3x in a
+          // row (an order-independent signature of the tool calls).
+          const signature = toolCalls
+            .map(tc => `${tc.name}:${tc.arguments}`)
+            .sort()
+            .join("|");
+          repeatCount = signature && signature === lastSignature ? repeatCount + 1 : 0;
+          lastSignature = signature;
+          if (repeatCount >= 2) {
+            // 3rd identical batch — genuinely stuck.
             controller.enqueue(
               encoder.encode(formatAgenticEvent({
                 type: "error",
-                error: "Detected potential loop - same tool calls repeated",
+                error: "Detected potential loop - same tool calls repeated 3x",
               }))
             );
             break;
           }
-          lastToolCallIds = currentToolCallIds;
 
           // Execute tool calls (can be parallel for independent tools)
           const toolResults = await Promise.all(

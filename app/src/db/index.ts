@@ -2,11 +2,40 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import * as schema from "./schema";
 
-const sqlite = new Database(process.env.DATABASE_URL?.replace("file:", "") || "./llmhub.db");
-export const db = drizzle(sqlite, { schema });
+// better-sqlite3 is a native addon — a Node ABI mismatch (after a version bump)
+// makes `new Database()` throw at import time, which used to cascade 500s into
+// EVERY route that imports `@/db`, even ones that only use Firestore in prod.
+// Build it inside a guard so import never throws; SQLite-backed routes get a
+// clear error on actual use, Firestore-backed routes are unaffected.
+let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
+try {
+  const sqlite = new Database(process.env.DATABASE_URL?.replace("file:", "") || "./llmhub.db");
+  initSchema(sqlite);
+  _db = drizzle(sqlite, { schema });
+} catch (err) {
+  console.error(
+    "[db] better-sqlite3 unavailable (native ABI mismatch?). SQLite-backed routes will error; " +
+    "rebuild it with `npm rebuild better-sqlite3`. Firestore-backed routes are unaffected.",
+    err
+  );
+}
 
-// Initialize tables on first run
-sqlite.exec(`
+// Lazy proxy: throws a clear, actionable error only when a SQLite route actually
+// touches the db, instead of crashing the whole module graph at import.
+export const db = new Proxy({} as ReturnType<typeof drizzle<typeof schema>>, {
+  get(_t, prop) {
+    if (!_db) {
+      throw new Error(
+        "SQLite database unavailable (better-sqlite3 failed to load). Run `npm rebuild better-sqlite3`, or use the Firestore provider."
+      );
+    }
+    return (_db as any)[prop];
+  },
+});
+
+function initSchema(sqlite: Database.Database): void {
+  // Initialize tables on first run
+  sqlite.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -61,7 +90,8 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id);
 `);
 
-// Migration: add source column if missing
-try {
-  sqlite.exec(`ALTER TABLE instances ADD COLUMN source TEXT DEFAULT 'web'`);
-} catch {}
+  // Migration: add source column if missing
+  try {
+    sqlite.exec(`ALTER TABLE instances ADD COLUMN source TEXT DEFAULT 'web'`);
+  } catch {}
+}

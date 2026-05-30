@@ -767,19 +767,31 @@ async function executeTask(
 export type ToolName = "Read" | "Edit" | "Write" | "MultiEdit" | "Bash" | "Glob" | "Grep" | "List" | "WebSearch" | "Task";
 
 // Canonical tool names keyed by lowercase, so multi-word names survive.
+// Keyed by the name with all non-alphanumerics stripped + lowercased, so every
+// casing/shape a model emits resolves: Read / read / read_file / Read_File /
+// readFile all collapse to "readfile". Includes the snake_case aliases the
+// schema's TOOL_NAME_MAP produces (read_file, shell_exec, search_files, …).
 const CANONICAL_TOOLS: Record<string, string> = {
-  read: "Read", edit: "Edit", write: "Write", multiedit: "MultiEdit",
-  bash: "Bash", glob: "Glob", grep: "Grep", list: "List",
-  websearch: "WebSearch", task: "Task",
+  read: "Read", readfile: "Read",
+  edit: "Edit", editfile: "Edit",
+  write: "Write", writefile: "Write",
+  multiedit: "MultiEdit", multiedits: "MultiEdit",
+  bash: "Bash", shell: "Bash", shellexec: "Bash", run: "Bash", runcommand: "Bash",
+  glob: "Glob", searchfiles: "Glob",
+  grep: "Grep",
+  list: "List", listdirectory: "List", ls: "List",
+  websearch: "WebSearch", websearchtool: "WebSearch",
+  task: "Task", spawntask: "Task",
 };
+const canonicalKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 export async function executeTool(
   name: ToolName | string,
   args: Record<string, unknown>,
   ctx: ToolExecutionContext
 ): Promise<ToolResult> {
-  // Resolve to a canonical tool name (preserves multi-word names like MultiEdit)
-  const normalizedName = CANONICAL_TOOLS[name.toLowerCase()] || name;
+  // Resolve to a canonical tool name (tolerates snake_case / odd casing).
+  const normalizedName = CANONICAL_TOOLS[canonicalKey(name)] || name;
 
   // Validate agent permissions if agent is specified
   if (ctx.agentName) {
