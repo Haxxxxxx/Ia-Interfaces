@@ -9477,6 +9477,23 @@ function stopSpinner(finalMessage?: string): number {
 }
 
 // Detect if content has special formatting (code blocks, tables)
+// Does the user's message read as a request to EXPLAIN/understand rather than
+// to act? If so we shouldn't force a tool turn just because it contains a verb
+// like "build" or "update" ("explain how the build works" is not an action).
+function isExplanatoryQuery(text: string): boolean {
+  return /^\s*(explain|how\b|why\b|what\b|where\b|when\b|which\b|who\b|describe|show me|tell me|walk me through|can you explain|could you explain|is it|are there|does\b|do you)\b/i.test(text || "");
+}
+
+// Is the assistant's reply genuinely asking the USER something (so we should
+// stop and let them answer)? A stray "?" mid-explanation must NOT count.
+function looksLikeUserQuestion(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) return false;
+  const lastLine = t.split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+  if (/\?\s*$/.test(lastLine)) return true; // ends by asking
+  return /\b(which (file|one|option|approach|of these)|do you want|would you like|should i\b|shall i\b|let me know|please (confirm|clarify|specify)|can you clarify|to confirm[:,])/i.test(t);
+}
+
 function hasSpecialFormatting(text: string): boolean {
   return text.includes("```") ||
          (text.includes("|") && /\|.*\|/.test(text)) ||
@@ -9751,9 +9768,10 @@ async function chat(userInput: string): Promise<void> {
   const maxIterations = 15; // Allow more iterations for complex tasks (like Claude Code)
   let totalToolCalls = 0;
   let nudgeCount = 0; // times we've forced "use a tool instead of narrating"
-  const actionRequested =
+  const actionRequested = !isExplanatoryQuery(userInput) && (
     /\b(add|edit|implement|fix|create|write|change|update|build|refactor|rename|remove|delete|enhance|make|wire|integrate)\b/i.test(userInput) ||
-    /\b(yourself|edit the code|do it|implement it|edit the actual|go ahead|proceed)\b/i.test(userInput);
+    /\b(yourself|edit the code|do it|implement it|edit the actual|go ahead|proceed)\b/i.test(userInput)
+  );
 
   while (continueLoop && iterations < maxIterations) {
     iterations++;
@@ -9940,7 +9958,7 @@ async function chat(userInput: string): Promise<void> {
         // If the model is asking the user a question, STOP so they can answer.
         // Otherwise force EXPLORATION (a read), not a write: if it just narrated
         // without using any tool, make it look at the code first.
-        const isQuestion = /\?/.test(content || "");
+        const isQuestion = looksLikeUserQuestion(content || "");
         if (currentAgent !== "plan" && actionRequested && totalToolCalls === 0 && !isQuestion && nudgeCount < 2) {
           nudgeCount++;
           messages.push({

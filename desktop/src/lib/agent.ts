@@ -71,6 +71,22 @@ function trimHistoryInPlace(messages: ChatMessage[]): void {
   }
 }
 
+// A request to EXPLAIN/understand (not act) — don't force a tool turn just
+// because it contains a verb like "build" or "update".
+function isExplanatoryQuery(text: string): boolean {
+  return /^\s*(explain|how\b|why\b|what\b|where\b|when\b|which\b|who\b|describe|show me|tell me|walk me through|can you explain|could you explain|is it|are there|does\b|do you)\b/i.test(text || "");
+}
+
+// Is the assistant genuinely asking the USER something (so we stop and let them
+// answer)? A stray "?" mid-explanation must NOT count.
+function looksLikeUserQuestion(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t) return false;
+  const lastLine = t.split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+  if (/\?\s*$/.test(lastLine)) return true;
+  return /\b(which (file|one|option|approach|of these)|do you want|would you like|should i\b|shall i\b|let me know|please (confirm|clarify|specify)|can you clarify|to confirm[:,])/i.test(t);
+}
+
 function parseToolCallsFromText(content: string): ToolCall[] {
   if (!content) return [];
   const calls: ToolCall[] = [];
@@ -135,9 +151,10 @@ export async function runAgent(
 
   // Did the latest user turn ask Rodeo to actually DO something (vs. explain)?
   const lastUser = [...messages].reverse().find((m) => m.role === "user" && typeof m.content === "string")?.content as string || "";
-  const actionRequested =
+  const actionRequested = !isExplanatoryQuery(lastUser) && (
     /\b(add|edit|implement|fix|create|write|change|update|build|refactor|rename|remove|delete|enhance|make|wire|set up|integrate)\b/i.test(lastUser) ||
-    /\b(yourself|edit the code|do it|implement it|edit the actual|go ahead|proceed)\b/i.test(lastUser);
+    /\b(yourself|edit the code|do it|implement it|edit the actual|go ahead|proceed)\b/i.test(lastUser)
+  );
 
   for (let iter = 0; iter < maxIter; iter++) {
     cb.onIteration?.(iter + 1);
@@ -227,7 +244,7 @@ export async function runAgent(
       const proposedCode = /```/.test(content);
       // If the model is asking the user a clarifying question, STOP so they can
       // answer — never keep looping/nudging on a question.
-      const isQuestion = /\?/.test(content);
+      const isQuestion = looksLikeUserQuestion(content);
       // Otherwise force EXPLORATION (a read), not a write: if the model just
       // narrated without looking at the code, make it use a read tool first.
       const shouldExploreFirst = actionRequested && !toolsUsed && !isQuestion;
