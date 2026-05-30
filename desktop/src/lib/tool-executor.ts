@@ -28,12 +28,31 @@ function bashGuard(command: string): string | null {
   return bad ? `Error: blocked by autonomy guardrail (matched ${bad}). Refusing to run: ${command}` : null;
 }
 
-// Keep file writes inside the working directory when guarded.
+// Collapse '.' and '..' segments so a sandbox check can't be fooled by traversal
+// (e.g. "<cwd>/../../etc/passwd" must reduce to "/etc/passwd" BEFORE we compare).
+function normalizePath(p: string): string {
+  const isAbs = p.startsWith("/");
+  const out: string[] = [];
+  for (const seg of p.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length && out[out.length - 1] !== "..") out.pop();
+      else if (!isAbs) out.push(".."); // can't go above an absolute root
+    } else {
+      out.push(seg);
+    }
+  }
+  return (isAbs ? "/" : "") + out.join("/");
+}
+
+// Keep file writes inside the working directory when guarded. Operates on the
+// NORMALIZED path so "../" can't escape the sandbox.
 function pathGuard(abs: string, cwd: string): string | null {
   if (!cwd) return "Error: autonomy guardrail — set a working directory before writing files.";
-  const base = cwd.replace(/\/$/, "");
-  if (abs === base || abs.startsWith(base + "/")) return null;
-  return `Error: autonomy guardrail — refusing to write outside the working directory (${base}): ${abs}`;
+  const base = normalizePath(cwd.replace(/\/$/, ""));
+  const target = normalizePath(abs);
+  if (target === base || target.startsWith(base + "/")) return null;
+  return `Error: autonomy guardrail — refusing to write outside the working directory (${base}): ${target}`;
 }
 
 interface ShellOutput {
@@ -56,12 +75,17 @@ export function isReadOnly(toolName: string): boolean {
   return READ_ONLY_TOOLS.has(toolName);
 }
 
-/** Resolve a possibly-relative path against the working directory. */
+/** Resolve a possibly-relative path against the working directory, NORMALIZED
+ *  (so '..' segments are collapsed and the sandbox check can't be bypassed and
+ *  the approval UI shows the true target, not a deceptive "../.." string). */
 export function resolvePath(p: string, cwd: string): string {
   if (!p) return cwd;
-  if (p.startsWith("/") || p.startsWith("~")) return p.replace(/^~/, "");
-  if (!cwd) return p;
-  return `${cwd.replace(/\/$/, "")}/${p.replace(/^\.\//, "")}`;
+  let abs: string;
+  if (p.startsWith("~")) abs = p.replace(/^~/, ""); // best-effort; pathGuard rejects if outside cwd
+  else if (p.startsWith("/")) abs = p;
+  else if (!cwd) return normalizePath(p);
+  else abs = `${cwd.replace(/\/$/, "")}/${p}`;
+  return normalizePath(abs);
 }
 
 // ----------------------------------------------------------------------------
