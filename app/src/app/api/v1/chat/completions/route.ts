@@ -98,6 +98,41 @@ interface ToolCallAccumulator {
   arguments: string;
 }
 
+/**
+ * Keep the agentic history within the model's context window. The loop appends
+ * a tool result every iteration, so a deep task overflows the window — small
+ * local models then silently drop the SYSTEM prompt / tool defs and stop calling
+ * tools. We elide the content of OLD tool results (escalating how few we keep
+ * full as pressure rises) WITHOUT dropping messages, so the assistant↔tool
+ * pairing (tool_call_id) stays valid for strict providers.
+ */
+function trimAgenticHistory(
+  msgs: OpenAI.Chat.ChatCompletionMessageParam[],
+  contextWindow: number
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  // Budget ~65% of the window for history; leave room for tools + the response.
+  const budgetChars = contextWindow * 0.65 * 4;
+  const sizeOf = (m: OpenAI.Chat.ChatCompletionMessageParam): number =>
+    (typeof m.content === "string" ? m.content.length : 0) +
+    ("tool_calls" in m && m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
+  const total = (list: OpenAI.Chat.ChatCompletionMessageParam[]) => list.reduce((n, m) => n + sizeOf(m), 0);
+  if (total(msgs) <= budgetChars) return msgs;
+
+  let out = msgs;
+  for (const keepFull of [8, 4, 2, 0]) {
+    const toolPositions: number[] = [];
+    out.forEach((m, i) => { if (m.role === "tool") toolPositions.push(i); });
+    const stale = new Set(toolPositions.slice(0, Math.max(0, toolPositions.length - keepFull)));
+    out = out.map((m, i) => {
+      if (!stale.has(i) || m.role !== "tool" || typeof m.content !== "string") return m;
+      if (m.content.length <= 400 || m.content.startsWith("[elided")) return m;
+      return { ...m, content: `[elided — ${m.content.length} chars; re-run the tool if you need this again]` };
+    });
+    if (total(out) <= budgetChars) break;
+  }
+  return out;
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -417,6 +452,10 @@ export async function POST(req: NextRequest) {
               );
             }
           }
+
+          // Keep history within the model's context window before each call so
+          // a deep task doesn't overflow and silently evict the system prompt.
+          agenticMessages = trimAgenticHistory(agenticMessages, modelInfo?.contextWindow || 8192);
 
           // Make LLM call
           let response;
