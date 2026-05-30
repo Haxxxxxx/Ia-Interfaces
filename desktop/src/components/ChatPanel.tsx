@@ -113,10 +113,19 @@ export function ChatPanel() {
         await runRemote(userText);
       }
     } catch (error) {
-      addMessage(activeInstance.id, {
-        role: "assistant",
-        content: `Error: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      const msg = error instanceof Error ? error.message : String(error);
+      const aborted = (error instanceof DOMException && error.name === "AbortError") || /\babort/i.test(msg);
+      // A deliberate Stop isn't a failure — the partial reply is already in the
+      // bubble, so don't slap a scary red "Error" on it.
+      if (!aborted) {
+        const connLost = /failed to fetch|networkerror|load failed|econnref|ollama error|fetch failed/i.test(msg);
+        addMessage(activeInstance.id, {
+          role: "assistant",
+          content: connLost
+            ? `⚠️ Lost contact with Ollama — ${msg}. Make sure it's running (the status bar can start it), then try again.`
+            : `Error: ${msg}`,
+        });
+      }
     } finally {
       setIsStreaming(false);
       setStatus("");
