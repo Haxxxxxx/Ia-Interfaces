@@ -4935,13 +4935,16 @@ function formatMarkdown(text: string): string {
       if (inCodeBlock) {
         // End code block — frame it as a panel: corner + lang chip, left bar
         // on every line, closing corner. Reads clearly as code, not prose.
-        const code = codeBuffer.join("\n");
+        const code = codeBuffer.join("\n").replace(/\n+$/, "");
         const highlighted = highlightCode(code, codeBlockLang);
         const bar = `${c.dim}│${c.reset}`;
         const chip = codeBlockLang ? ` ${c.orange}${codeBlockLang}${c.reset}` : ` ${c.dim}code${c.reset}`;
+        const codeLines = highlighted.split("\n");
+        const gw = String(codeLines.length).length; // gutter width for line numbers
         result.push(`${c.dim}╭─${c.reset}${chip}`);
-        highlighted.split("\n").forEach(codeLine => {
-          result.push(`${bar} ${codeLine}`);
+        codeLines.forEach((codeLine, idx) => {
+          const ln = String(idx + 1).padStart(gw);
+          result.push(`${bar} ${c.dim}${ln}${c.reset} ${codeLine}`);
         });
         result.push(`${c.dim}╰─${c.reset}`);
         result.push(""); // Blank line after code block
