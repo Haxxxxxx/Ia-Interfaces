@@ -21,8 +21,9 @@ function parseStatus(text: string): { status: "ok" | "alert" | "error"; summary:
     const status = m[1].toLowerCase() as "ok" | "alert" | "error";
     return { status, summary: (m[2] || "").trim() || text.slice(-200).trim() };
   }
-  // No explicit verdict — assume OK, keep a short tail as the summary.
-  return { status: "ok", summary: text.slice(-200).trim() || "(no summary)" };
+  // No explicit verdict — do NOT assume OK. A monitor that should have alerted
+  // but produced malformed output must be visible, not silently green.
+  return { status: "error", summary: `No STATUS verdict — ${text.slice(-180).trim() || "(empty response)"}` };
 }
 
 async function notifyAlert(title: string, body: string) {

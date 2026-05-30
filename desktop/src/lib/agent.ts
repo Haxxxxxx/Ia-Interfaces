@@ -231,6 +231,28 @@ export async function runAgent(
     lastSignature = signature;
     toolsUsed = true;
 
+    // Fast path: a batch of only read-only tools (Read/Glob/Grep/List, no
+    // AskUser, no mutations) — run them CONCURRENTLY instead of one Tauri
+    // round-trip at a time. Results are still pushed in the original order
+    // (native /api/chat matches tool results to calls by order).
+    if (toolCalls.length > 1 && toolCalls.every((t) => t.function.name !== "AskUser" && isReadOnly(t.function.name))) {
+      const settled = await Promise.all(
+        toolCalls.map(async (tc) => {
+          cb.onToolStart?.(tc, describeTool(tc));
+          const tt0 = performance.now();
+          const result = await executeTool(tc, opts.cwd, opts.guarded);
+          cb.onToolMetric?.({ toolName: tc.function.name, durationMs: Math.round(performance.now() - tt0), ok: !result.startsWith("Error") });
+          cb.onToolResult?.(tc, result);
+          return { tc, result };
+        })
+      );
+      for (const { tc, result } of settled) {
+        messages.push({ role: "tool", tool_call_id: tc.id, name: tc.function.name, content: result });
+      }
+      if (opts.signal?.aborted) return messages;
+      continue;
+    }
+
     // Execute each tool call (read-only auto-runs; mutations need approval).
     for (const tc of toolCalls) {
       if (opts.signal?.aborted) return messages;
