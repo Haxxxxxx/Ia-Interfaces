@@ -454,6 +454,15 @@ export async function POST(req: NextRequest) {
               );
             }
 
+            // Forward reasoning/thinking tokens (DeepSeek reasoner, Kimi thinking)
+            // — they're billed as output either way, so dropping them silently
+            // both loses the chain-of-thought and wastes what the user paid for.
+            else if ((delta as { reasoning_content?: string })?.reasoning_content) {
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+              );
+            }
+
             // Accumulate tool calls
             if (delta?.tool_calls) {
               for (const tc of delta.tool_calls) {

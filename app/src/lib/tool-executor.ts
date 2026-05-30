@@ -34,8 +34,13 @@ export interface ToolExecutionContext {
   sessionId?: string;
   agentName?: string; // Current agent (build, plan, explore, general)
   model?: string; // Model to use for spawned subagents (Task tool)
+  taskDepth?: number; // Nesting depth of Task subagents (recursion guard)
   onFileChange?: (change: FileChange) => void;
 }
+
+// A Task subagent may itself call tools, but it must not spawn Tasks without
+// bound — cap the nesting depth to avoid N×M (or runaway) LLM fan-out.
+const MAX_TASK_DEPTH = 2;
 
 export interface FileChange {
   type: "create" | "edit" | "delete";
@@ -716,6 +721,11 @@ async function executeTask(
     return { success: false, output: "", error: "prompt is required" };
   }
 
+  const depth = ctx.taskDepth ?? 0;
+  if (depth >= MAX_TASK_DEPTH) {
+    return { success: false, output: "", error: `Task subagents cannot nest deeper than ${MAX_TASK_DEPTH}. Do this work directly with your own tools.` };
+  }
+
   try {
     const { chat } = await import("./llm-client");
     const { TOOLS } = await import("./tools-schema");
@@ -745,7 +755,7 @@ async function executeTask(
       for (const call of calls) {
         let toolArgs: Record<string, unknown> = {};
         try { toolArgs = JSON.parse(call.function.arguments || "{}"); } catch {}
-        const r = await executeTool(call.function.name, toolArgs, { ...ctx, agentName: subType });
+        const r = await executeTool(call.function.name, toolArgs, { ...ctx, agentName: subType, taskDepth: depth + 1 });
         messages.push({
           role: "tool",
           tool_call_id: call.id,
