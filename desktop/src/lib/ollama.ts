@@ -100,13 +100,17 @@ export function pickStrongestModel(models: string[]): string {
   return [...pool].sort((a, b) => nameScore(b) - nameScore(a))[0] || models[0] || "qwen2.5:14b";
 }
 
-/** Total system RAM in bytes (via sysctl); 0 if unavailable. */
+/** Total system RAM in bytes (via sysctl); 0 if unavailable. Memoized — RAM
+ *  never changes within a session, so we don't re-spawn a shell per Audit/click. */
+let _ramBytes: number | null = null;
 export async function getTotalRamBytes(): Promise<number> {
+  if (_ramBytes !== null) return _ramBytes;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const o = await invoke<{ stdout: string }>("exec_shell", { command: "sysctl -n hw.memsize", cwd: "" });
-    return parseInt((o.stdout || "").trim()) || 0;
-  } catch { return 0; }
+    _ramBytes = parseInt((o.stdout || "").trim()) || 0;
+  } catch { _ramBytes = 0; }
+  return _ramBytes;
 }
 
 /** Does a model's on-disk size fit in RAM with headroom for the OS + app? */
@@ -128,7 +132,7 @@ export async function ollamaComplete(messages: ChatMessage[], model: string, sig
   const res = await fetch(`${OLLAMA_URL}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: false, temperature: 0.2 }),
+    body: JSON.stringify({ model, messages, stream: false, temperature: 0.2, keep_alive: "30m" }),
     signal,
   });
   if (!res.ok) throw new Error(`Ollama error ${res.status}`);
@@ -144,13 +148,17 @@ export async function* streamOllamaChat(
   messages: ChatMessage[],
   options: { model: string; tools?: unknown[]; temperature?: number; signal?: AbortSignal } = { model: "qwen2.5-coder:7b" }
 ): AsyncGenerator<ChatChunk> {
-  const { model, tools, temperature = 0.3, signal } = options;
+  const { model, tools, temperature = 0.2, signal } = options;
 
   const body: Record<string, unknown> = {
     model,
     messages,
     stream: true,
     temperature,
+    // Keep the model resident between turns — Ollama honors keep_alive on the
+    // OpenAI endpoint (num_ctx/options are NOT honored here, so context size is
+    // raised via the rodeo:tuned Modelfile instead).
+    keep_alive: "30m",
   };
   // Only attach tools to models that can actually use them — avoids
   // confusing models that ignore the field and emit JSON in content.

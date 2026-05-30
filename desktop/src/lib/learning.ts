@@ -77,7 +77,11 @@ export async function runSelfUpdate(opts: { bakeModel?: boolean } = {}): Promise
     try {
       const base = pickBase(s.ollamaModels);
       const sys = `${BASE_PERSONA}\n\nLearned profile:\n${profile}`.replace(/"""/g, '"');
-      const modelfile = `FROM ${base}\nPARAMETER temperature 0.3\nSYSTEM """${sys}"""\n`;
+      // num_ctx 8192: the OpenAI endpoint ignores per-request num_ctx, so we
+      // raise the context window here — keeps the system prompt + tools + a
+      // multi-turn agentic loop from overflowing Ollama's small default ctx.
+      // temperature 0.2: steadier exact-string edits.
+      const modelfile = `FROM ${base}\nPARAMETER temperature 0.2\nPARAMETER num_ctx 8192\nSYSTEM """${sys}"""\n`;
       const tmp = "/tmp/rodeo-Modelfile";
       await invoke("write_file", { path: tmp, content: modelfile });
       const out = await invoke<ShellOutput>("exec_shell", { command: `ollama create rodeo:tuned -f ${tmp}`, cwd: "" });

@@ -40,13 +40,17 @@ function extractJsonObjects(text: string): any[] {
   return objs;
 }
 
+// Known tool names (lowercased) — reject prose JSON that merely looks tool-shaped.
+const KNOWN_TOOL_NAMES = new Set(TOOL_SCHEMAS.map((t) => t.function.name.toLowerCase()));
+
 function parseToolCallsFromText(content: string): ToolCall[] {
   if (!content) return [];
   const calls: ToolCall[] = [];
   const add = (obj: any) => {
-    const name = obj?.name;
-    const args = obj?.arguments ?? obj?.parameters;
-    if (typeof name === "string" && args && typeof args === "object") {
+    // Tolerate the key shapes weak models emit for the name and the args.
+    const name = obj?.name ?? obj?.tool ?? obj?.function ?? obj?.action;
+    const args = obj?.arguments ?? obj?.parameters ?? obj?.args ?? obj?.input ?? obj?.tool_input;
+    if (typeof name === "string" && KNOWN_TOOL_NAMES.has(name.toLowerCase()) && args && typeof args === "object") {
       calls.push({ id: `parsed_${calls.length}_${Math.random().toString(36).slice(2, 8)}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
     }
   };
@@ -236,6 +240,7 @@ export async function runAgent(
         let qa: any = {};
         try { qa = JSON.parse(tc.function.arguments || "{}"); } catch {}
         cb.onToolStart?.(tc, `Question: ${qa.question || ""}`);
+        const opt0 = Array.isArray(qa.options) && qa.options.length ? String(qa.options[0]) : "";
         const answer = cb.requestChoice
           ? await cb.requestChoice({
               question: String(qa.question || "?"),
@@ -243,7 +248,11 @@ export async function runAgent(
               header: qa.header ? String(qa.header) : undefined,
               allowMultiple: !!qa.allowMultiple,
             })
-          : "Running autonomously — make the best decision and proceed without asking.";
+          // Unattended: hand back a CONCRETE decision (the first option) rather
+          // than a meta-instruction the model tends to re-ask about or stall on.
+          : opt0
+            ? `Running autonomously — proceeding with: ${opt0}`
+            : "Running autonomously — make the best decision and proceed without asking.";
         cb.onToolResult?.(tc, answer);
         messages.push({ role: "tool", tool_call_id: tc.id, name: "AskUser", content: answer });
         if (opts.signal?.aborted) return messages;
