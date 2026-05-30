@@ -3,7 +3,9 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { Dashboard } from "./components/Dashboard";
 import { TasksView } from "./components/TasksView";
+import { MonitorsView } from "./components/MonitorsView";
 import { shouldSelfUpdate, runSelfUpdate } from "./lib/learning";
+import { tickMonitors } from "./lib/monitors";
 import { StatusBar } from "./components/StatusBar";
 import { SettingsModal } from "./components/SettingsModal";
 import { CommandPalette } from "./components/CommandPalette";
@@ -77,6 +79,13 @@ function App() {
     return () => { cancelled = true; clearTimeout(t); clearInterval(iv); };
   }, []);
 
+  // Monitoring scheduler: check due monitors on launch + every 30s.
+  useEffect(() => {
+    const t = setTimeout(() => { tickMonitors(); }, 8000);
+    const iv = setInterval(() => { tickMonitors(); }, 30_000);
+    return () => { clearTimeout(t); clearInterval(iv); };
+  }, []);
+
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -121,7 +130,7 @@ function App() {
       {/* Main */}
       <div className="flex-1 flex overflow-hidden">
         <Sidebar />
-        {view === "dashboard" ? <Dashboard /> : view === "tasks" ? <TasksView /> : <ChatPanel />}
+        {view === "dashboard" ? <Dashboard /> : view === "tasks" ? <TasksView /> : view === "monitors" ? <MonitorsView /> : <ChatPanel />}
       </div>
 
       {/* Status Bar */}

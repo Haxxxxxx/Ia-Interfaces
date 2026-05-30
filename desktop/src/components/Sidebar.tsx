@@ -16,7 +16,10 @@ export function Sidebar() {
     setShowSettings,
     view,
     setView,
+    monitors,
   } = useStore();
+
+  const alertCount = monitors.filter((m) => m.lastStatus === "alert").length;
 
   function handleCreateInstance(e: React.FormEvent) {
     e.preventDefault();
@@ -58,7 +61,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="px-2 py-2 border-b border-terminal-border space-y-1">
-        {([["chat", "▸", "Chat"], ["tasks", "◷", "Tasks"], ["dashboard", "▦", "Performance"]] as const).map(([v, icon, label]) => (
+        {([["chat", "▸", "Chat"], ["tasks", "◷", "Tasks"], ["monitors", "◎", "Monitors"], ["dashboard", "▦", "Performance"]] as const).map(([v, icon, label]) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -67,7 +70,10 @@ export function Sidebar() {
             }`}
           >
             <span>{icon}</span>
-            <span>{label}</span>
+            <span className="flex-1 text-left">{label}</span>
+            {v === "monitors" && alertCount > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-terminal-red text-terminal-bg font-semibold">{alertCount}</span>
+            )}
           </button>
         ))}
       </nav>

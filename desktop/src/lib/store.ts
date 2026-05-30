@@ -33,6 +33,24 @@ export interface PerfEvent {
   ok?: boolean;        // tool success
 }
 
+export interface MonitorRun {
+  ts: number;
+  status: "ok" | "alert" | "error";
+  summary: string;
+}
+
+export interface MonitorTask {
+  id: string;
+  title: string;
+  prompt: string;          // what to check each run
+  everyMinutes: number;    // run interval
+  enabled: boolean;
+  lastRunAt: number;
+  lastStatus: "ok" | "alert" | "error" | "never";
+  lastSummary: string;
+  runs: MonitorRun[];      // capped history
+}
+
 export interface AgentTask {
   id: string;
   title: string;
@@ -96,8 +114,8 @@ interface AppState {
   setConnected: (connected: boolean) => void;
 
   // Views
-  view: "chat" | "tasks" | "dashboard";
-  setView: (v: "chat" | "tasks" | "dashboard") => void;
+  view: "chat" | "tasks" | "monitors" | "dashboard";
+  setView: (v: "chat" | "tasks" | "monitors" | "dashboard") => void;
 
   // Perf metrics (session only)
   metrics: PerfEvent[];
@@ -123,6 +141,15 @@ interface AppState {
   selfUpdateEnabled: boolean;
   setSelfUpdateEnabled: (v: boolean) => void;
   setLearned: (profile: string, at: number) => void;
+
+  // Scheduled monitoring tasks
+  monitors: MonitorTask[];
+  addMonitor: (m: { title: string; prompt: string; everyMinutes: number }) => string;
+  updateMonitor: (id: string, patch: Partial<MonitorTask>) => void;
+  removeMonitor: (id: string) => void;
+  recordMonitorRun: (id: string, run: MonitorRun) => void;
+  monitorBusy: boolean;
+  setMonitorBusy: (v: boolean) => void;
 }
 
 export const useStore = create<AppState>()(
@@ -275,6 +302,32 @@ export const useStore = create<AppState>()(
       selfUpdateEnabled: true,
       setSelfUpdateEnabled: (selfUpdateEnabled) => set({ selfUpdateEnabled }),
       setLearned: (learnedProfile, lastLearnedAt) => set({ learnedProfile, lastLearnedAt }),
+
+      // Scheduled monitoring tasks
+      monitors: [],
+      addMonitor: ({ title, prompt, everyMinutes }) => {
+        const id = crypto.randomUUID();
+        set((s) => ({
+          monitors: [...s.monitors, {
+            id, title, prompt, everyMinutes, enabled: true,
+            lastRunAt: 0, lastStatus: "never", lastSummary: "", runs: [],
+          }],
+        }));
+        return id;
+      },
+      updateMonitor: (id, patch) =>
+        set((s) => ({ monitors: s.monitors.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
+      removeMonitor: (id) => set((s) => ({ monitors: s.monitors.filter((m) => m.id !== id) })),
+      recordMonitorRun: (id, run) =>
+        set((s) => ({
+          monitors: s.monitors.map((m) =>
+            m.id === id
+              ? { ...m, lastRunAt: run.ts, lastStatus: run.status, lastSummary: run.summary, runs: [...m.runs.slice(-19), run] }
+              : m
+          ),
+        })),
+      monitorBusy: false,
+      setMonitorBusy: (monitorBusy) => set({ monitorBusy }),
     }),
     {
       name: "rodeo-storage",
@@ -292,6 +345,7 @@ export const useStore = create<AppState>()(
         learnedProfile: state.learnedProfile,
         lastLearnedAt: state.lastLearnedAt,
         selfUpdateEnabled: state.selfUpdateEnabled,
+        monitors: state.monitors,
       }),
     }
   )
