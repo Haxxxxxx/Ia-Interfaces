@@ -168,9 +168,10 @@ export const useStore = create<AppState>()(
       // Offline brain — default to fully-local operation
       mode: "local",
       setMode: (mode) => set({ mode }),
-      // Instruct models tool-call reliably under Ollama; the -coder variants
-      // tend to emit tool calls as plain text, breaking the agentic loop.
-      localModel: "qwen2.5:7b",
+      // 14b is much more reliable at agentic editing than 7b (7b narrates /
+      // drops tool calls). Instruct models tool-call cleanly; -coder variants
+      // emit tool calls as text, so avoid them for the agent loop.
+      localModel: "qwen2.5:14b",
       setLocalModel: (localModel) => set({ localModel }),
       autoApprove: false,
       setAutoApprove: (autoApprove) => set({ autoApprove }),

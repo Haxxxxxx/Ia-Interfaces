@@ -6,7 +6,7 @@ import { buildSystemPrompt } from "../lib/tools";
 import { gatherProjectContext } from "../lib/project-context";
 import type { ChatMessage } from "../lib/ollama";
 import { ThinkingBlock } from "./ThinkingBlock";
-import { CodeBlock } from "./CodeBlock";
+import { Markdown } from "./Markdown";
 import { ToolApproval } from "./ToolCallUI";
 
 export function ChatPanel() {
@@ -245,9 +245,7 @@ export function ChatPanel() {
                 <div className="shrink-0 w-8 h-8 rounded-lg bg-terminal-accent/15 text-terminal-accent flex items-center justify-center text-sm font-bold">▸</div>
                 <div className="flex-1 min-w-0 pt-0.5">
                   {message.reasoningContent && <ThinkingBlock content={message.reasoningContent} />}
-                  {message.content && (
-                    <div className="selectable whitespace-pre-wrap text-sm leading-relaxed">{renderContent(message.content)}</div>
-                  )}
+                  {message.content && <Markdown content={message.content} />}
                   {message.toolCalls?.map((tc) => (
                     <div key={tc.id} className="mt-2 inline-flex items-center gap-2 text-xs bg-terminal-surface border border-terminal-border rounded-md px-2.5 py-1 text-terminal-muted">
                       <span className="text-terminal-accent">⚙</span> {tc.function.name}
@@ -343,16 +341,3 @@ function safeParse(s: string): Record<string, unknown> {
   try { return JSON.parse(s || "{}"); } catch { return {}; }
 }
 
-function renderContent(content: string): React.ReactNode {
-  const parts = content.split(/(```[\s\S]*?```)/g);
-  return parts.map((part, index) => {
-    if (part.startsWith("```")) {
-      const match = part.match(/```(\w+)?\n?([\s\S]*?)```/);
-      if (match) {
-        const [, language, code] = match;
-        return <CodeBlock key={index} code={code.trim()} language={language} />;
-      }
-    }
-    return <span key={index}>{part}</span>;
-  });
-}

@@ -9934,6 +9934,14 @@ ${c.dim}└${c.reset} ${c.bold}Time${c.reset}      ${c.dim}${timeStr}${c.reset}
 
   // Quick check if selected model is available
   const models = await fetchAvailableModels();
+
+  // Auto-prefer the nightly self-tuned model when it exists and the user is on
+  // the default (no explicit RODEO_MODEL). It carries learnings from past sessions.
+  if (!process.env.RODEO_MODEL && CONFIG.model === "qwen2.5:7b" && models.some((m: any) => m.id === "rodeo:tuned")) {
+    CONFIG.model = "rodeo:tuned";
+    console.log(`${c.green}●${c.reset} ${c.dim}Using your self-tuned model${c.reset} ${c.cyan}rodeo:tuned${c.reset} ${c.dim}(learned from past sessions)${c.reset}\n`);
+  }
+
   const selectedModel = models.find((m: any) => m.id === CONFIG.model);
   if (selectedModel && selectedModel.installed === false) {
     console.log(`${c.yellow}⚠${c.reset} Model ${c.cyan}${CONFIG.model}${c.reset} is not installed locally`);

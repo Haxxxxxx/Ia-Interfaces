@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface CodeBlockProps {
   code: string;
@@ -12,31 +14,27 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
     try {
       await navigator.clipboard.writeText(code);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard not available
-    }
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard unavailable */ }
   }
 
   return (
-    <div className="my-3 border border-terminal-border rounded overflow-hidden">
-      {/* Header */}
-      <div className="px-3 py-1.5 bg-terminal-surface border-b border-terminal-border flex items-center justify-between">
-        <span className="text-xs text-terminal-muted">
-          {language || "code"}
-        </span>
-        <button
-          onClick={handleCopy}
-          className="text-xs text-terminal-muted hover:text-terminal-text transition-colors"
-        >
-          {copied ? "✓ Copied" : "Copy"}
+    <div className="my-3 border border-terminal-border rounded-lg overflow-hidden bg-[#0b0e14]">
+      <div className="px-3 py-1.5 bg-terminal-surface/70 border-b border-terminal-border flex items-center justify-between">
+        <span className="text-xs text-terminal-muted font-medium">{language || "code"}</span>
+        <button onClick={handleCopy} className="text-xs text-terminal-muted hover:text-terminal-accent transition-colors">
+          {copied ? "✓ copied" : "copy"}
         </button>
       </div>
-
-      {/* Code */}
-      <pre className="p-3 overflow-x-auto bg-terminal-bg">
-        <code className="text-sm text-terminal-text">{code}</code>
-      </pre>
+      <SyntaxHighlighter
+        language={language || "text"}
+        style={oneDark}
+        customStyle={{ margin: 0, background: "transparent", padding: "0.85rem", fontSize: "12.5px", lineHeight: 1.55 }}
+        codeTagProps={{ style: { fontFamily: "'JetBrains Mono', monospace" } }}
+        wrapLongLines={false}
+      >
+        {code}
+      </SyntaxHighlighter>
     </div>
   );
 }

@@ -77,6 +77,11 @@ pre, code {
   font-size: 13px;
 }
 
+/* Markdown body spacing */
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+.md-body { word-break: break-word; }
+
 /* Animations */
 @keyframes blink {
   0%, 50% { opacity: 1; }
