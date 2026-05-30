@@ -84,17 +84,16 @@ export async function chat(params: ChatParams) {
   } = params;
 
   const client = getClientForModel(model);
+  const isOllama = !model.startsWith("kimi-") && !model.startsWith("deepseek-");
 
   const run = async (attempt: number): Promise<AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk> | OpenAI.Chat.Completions.ChatCompletion> => {
     try {
-      return await client.chat.completions.create({
-        model,
-        messages,
-        tools,
-        stream,
-        max_tokens: maxTokens,
-        temperature,
-      });
+      // keep_alive isn't in the OpenAI types but Ollama honors it — keeps the
+      // model resident across the (up to 8) agentic iterations on a cold/shared
+      // box. Build as `any` so it doesn't disturb the stream overload typing.
+      const createParams: any = { model, messages, tools, stream, max_tokens: maxTokens, temperature };
+      if (isOllama) createParams.keep_alive = "30m";
+      return await client.chat.completions.create(createParams);
     } catch (err: any) {
       const retryable = ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "ENOTFOUND"].includes(err?.code);
       if (attempt < RETRY_ATTEMPTS && retryable) {

@@ -13,6 +13,16 @@ import { validateToolAccess, getToolsForAgent, type AgentInfo } from "./agents";
 
 const execAsync = promisify(exec);
 
+// Probe for ripgrep once per process, not on every Grep call (each probe is a
+// child_process spawn — in an agentic loop that greps 5-10x it adds up).
+let _hasRg: boolean | null = null;
+async function hasRipgrep(): Promise<boolean> {
+  if (_hasRg !== null) return _hasRg;
+  try { await execAsync("which rg"); _hasRg = true; }
+  catch { _hasRg = false; }
+  return _hasRg;
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -570,14 +580,8 @@ async function executeGrep(
     command += ` "${args.pattern.replace(/"/g, '\\"')}" "${searchPath}"`;
     command += ` 2>/dev/null || true`;
 
-    // Try ripgrep first (much faster and respects .gitignore)
-    let useRipgrep = false;
-    try {
-      await execAsync("which rg");
-      useRipgrep = true;
-    } catch {
-      // ripgrep not available
-    }
+    // Try ripgrep first (much faster and respects .gitignore) — probe cached.
+    const useRipgrep = await hasRipgrep();
 
     if (useRipgrep) {
       command = `rg -n --max-count=500`;

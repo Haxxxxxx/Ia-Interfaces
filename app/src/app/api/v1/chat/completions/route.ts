@@ -301,7 +301,10 @@ export async function POST(req: NextRequest) {
               controller.close();
 
               if (inputTokens > 0 || outputTokens > 0) {
-                await logUsage(user.id, model, inputTokens, outputTokens, cachedTokens, instanceId);
+                // Fire-and-forget: the stream is already closed; don't make the
+                // client wait on a usage-log DB write.
+                void logUsage(user.id, model, inputTokens, outputTokens, cachedTokens, instanceId)
+                  .catch((e) => console.error("logUsage failed:", e));
               }
             } catch (error) {
               controller.error(error);
@@ -322,14 +325,14 @@ export async function POST(req: NextRequest) {
         const result = response as unknown as {
           usage?: { prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number };
         };
-        await logUsage(
+        void logUsage(
           user.id,
           model,
           result.usage?.prompt_tokens || 0,
           result.usage?.completion_tokens || 0,
           result.usage?.cached_tokens || 0,
           instanceId
-        );
+        ).catch((e) => console.error("logUsage failed:", e));
         return Response.json(result);
       }
     } catch (error: any) {
@@ -593,10 +596,12 @@ export async function POST(req: NextRequest) {
             } as OpenAI.Chat.ChatCompletionToolMessageParam);
           }
 
-          // Check if any tool had an error that should stop the loop
+          // Check if any tool had an error that should stop the loop.
+          // NOTE: && binds tighter than ||, so the guard MUST be parenthesized —
+          // otherwise a *successful* tool whose output contained "blocked" would
+          // break the loop, and failed-sandbox errors wouldn't reliably stop it.
           const criticalError = toolResults.find(r =>
-            !r.success && r.error?.includes("sandbox") ||
-            r.error?.includes("blocked")
+            !r.success && (r.error?.includes("sandbox") || r.error?.includes("blocked"))
           );
           if (criticalError) {
             break;
@@ -612,16 +617,16 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
 
-        // Log total usage
+        // Log total usage — fire-and-forget, stream already closed.
         if (totalInputTokens > 0 || totalOutputTokens > 0) {
-          await logUsage(
+          void logUsage(
             user.id,
             model,
             totalInputTokens,
             totalOutputTokens,
             totalCachedTokens,
             instanceId
-          );
+          ).catch((e) => console.error("logUsage failed:", e));
         }
       } catch (error: any) {
         controller.enqueue(
