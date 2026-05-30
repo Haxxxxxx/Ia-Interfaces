@@ -11,7 +11,11 @@ export async function gatherProjectContext(cwd: string): Promise<string> {
   if (!cwd) return "";
   const parts: string[] = [];
 
-  // Project instructions files (highest signal).
+  // Rodeo's own project memory — highest priority, his accumulated knowledge.
+  const memory = await tryRead(`${cwd}/.rodeo/memory.md`);
+  if (memory) parts.push(`### Rodeo project memory (.rodeo/memory.md — your own notes on this codebase)\n${truncate(memory, 4000)}`);
+
+  // Project instructions files.
   for (const file of ["CLAUDE.md", "RODEO.md", "AGENTS.md", ".cursorrules"]) {
     const text = await tryRead(`${cwd}/${file}`);
     if (text) parts.push(`### ${file}\n${truncate(text, 1500)}`);

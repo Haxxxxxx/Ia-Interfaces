@@ -17,9 +17,12 @@ export function Sidebar() {
     view,
     setView,
     monitors,
+    workspaces,
+    activeWorkspaceId,
   } = useStore();
 
   const alertCount = monitors.filter((m) => m.lastStatus === "alert").length;
+  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
 
   function handleCreateInstance(e: React.FormEvent) {
     e.preventDefault();
@@ -47,10 +50,10 @@ export function Sidebar() {
     <aside className="w-64 border-r border-terminal-border flex flex-col">
       {/* Header */}
       <div className="p-4 border-b border-terminal-border flex items-center justify-between">
-        <span className="font-semibold flex items-center gap-2">
-          <span className="text-terminal-accent">▸</span>
-          <span>Rodeo</span>
-        </span>
+        <button onClick={() => setView("workspaces")} className="font-semibold flex items-center gap-2 min-w-0 hover:text-terminal-accent" title="Manage workspaces">
+          <span className="text-terminal-accent shrink-0">▸</span>
+          <span className="truncate">{activeWorkspace ? activeWorkspace.name : "Rodeo"}</span>
+        </button>
         <button
           onClick={toggleSidebar}
           className="p-1 hover:bg-terminal-surface rounded text-terminal-muted hover:text-terminal-text"
@@ -61,7 +64,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="px-2 py-2 border-b border-terminal-border space-y-1">
-        {([["chat", "▸", "Chat"], ["tasks", "◷", "Tasks"], ["monitors", "◎", "Monitors"], ["dashboard", "▦", "Performance"]] as const).map(([v, icon, label]) => (
+        {([["chat", "▸", "Chat"], ["workspaces", "◧", "Projects"], ["tasks", "◷", "Tasks"], ["monitors", "◎", "Monitors"], ["dashboard", "▦", "Performance"]] as const).map(([v, icon, label]) => (
           <button
             key={v}
             onClick={() => setView(v)}

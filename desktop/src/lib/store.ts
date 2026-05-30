@@ -51,6 +51,15 @@ export interface MonitorTask {
   runs: MonitorRun[];      // capped history
 }
 
+export interface Workspace {
+  id: string;
+  name: string;
+  path: string;            // project root / working directory
+  model: string;           // preferred local model for this project
+  createdAt: number;
+  lastOpenedAt: number;
+}
+
 export interface AgentTask {
   id: string;
   title: string;
@@ -114,8 +123,8 @@ interface AppState {
   setConnected: (connected: boolean) => void;
 
   // Views
-  view: "chat" | "tasks" | "monitors" | "dashboard";
-  setView: (v: "chat" | "tasks" | "monitors" | "dashboard") => void;
+  view: "chat" | "workspaces" | "tasks" | "monitors" | "dashboard";
+  setView: (v: "chat" | "workspaces" | "tasks" | "monitors" | "dashboard") => void;
 
   // Perf metrics (session only)
   metrics: PerfEvent[];
@@ -141,6 +150,14 @@ interface AppState {
   selfUpdateEnabled: boolean;
   setSelfUpdateEnabled: (v: boolean) => void;
   setLearned: (profile: string, at: number) => void;
+
+  // Project workspaces
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+  addWorkspace: (name: string, path: string, model?: string) => string;
+  updateWorkspace: (id: string, patch: Partial<Workspace>) => void;
+  removeWorkspace: (id: string) => void;
+  switchWorkspace: (id: string) => void;
 
   // Scheduled monitoring tasks
   monitors: MonitorTask[];
@@ -304,6 +321,39 @@ export const useStore = create<AppState>()(
       setSelfUpdateEnabled: (selfUpdateEnabled) => set({ selfUpdateEnabled }),
       setLearned: (learnedProfile, lastLearnedAt) => set({ learnedProfile, lastLearnedAt }),
 
+      // Project workspaces
+      workspaces: [],
+      activeWorkspaceId: null,
+      addWorkspace: (name, path, model) => {
+        const id = crypto.randomUUID();
+        const now = Date.now();
+        set((s) => ({
+          workspaces: [...s.workspaces, { id, name, path, model: model || s.localModel, createdAt: now, lastOpenedAt: now }],
+          activeWorkspaceId: id,
+          workingDirectory: path,
+          ...(model ? { localModel: model } : {}),
+        }));
+        return id;
+      },
+      updateWorkspace: (id, patch) =>
+        set((s) => ({ workspaces: s.workspaces.map((w) => (w.id === id ? { ...w, ...patch } : w)) })),
+      removeWorkspace: (id) =>
+        set((s) => ({
+          workspaces: s.workspaces.filter((w) => w.id !== id),
+          activeWorkspaceId: s.activeWorkspaceId === id ? null : s.activeWorkspaceId,
+        })),
+      switchWorkspace: (id) =>
+        set((s) => {
+          const w = s.workspaces.find((x) => x.id === id);
+          if (!w) return {};
+          return {
+            activeWorkspaceId: id,
+            workingDirectory: w.path,
+            localModel: w.model || s.localModel,
+            workspaces: s.workspaces.map((x) => (x.id === id ? { ...x, lastOpenedAt: Date.now() } : x)),
+          };
+        }),
+
       // Scheduled monitoring tasks
       monitors: [],
       addMonitor: ({ title, prompt, everyMinutes }) => {
@@ -347,6 +397,8 @@ export const useStore = create<AppState>()(
         lastLearnedAt: state.lastLearnedAt,
         selfUpdateEnabled: state.selfUpdateEnabled,
         monitors: state.monitors,
+        workspaces: state.workspaces,
+        activeWorkspaceId: state.activeWorkspaceId,
       }),
     }
   )

@@ -3171,6 +3171,7 @@ function getMemoryContext(): string {
 
 // Context file names to look for, in order of priority
 const PROJECT_CONTEXT_FILES = [
+  ".rodeo/memory.md",   // Rodeo's own living project memory (shared with the desktop app)
   "RODEO.md",
   ".rodeo/context.md",
   "CLAUDE.md",

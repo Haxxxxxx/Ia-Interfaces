@@ -4,6 +4,7 @@ import { ChatPanel } from "./components/ChatPanel";
 import { Dashboard } from "./components/Dashboard";
 import { TasksView } from "./components/TasksView";
 import { MonitorsView } from "./components/MonitorsView";
+import { WorkspacesView } from "./components/WorkspacesView";
 import { shouldSelfUpdate, runSelfUpdate } from "./lib/learning";
 import { tickMonitors } from "./lib/monitors";
 import { StatusBar } from "./components/StatusBar";
@@ -130,7 +131,7 @@ function App() {
       {/* Main */}
       <div className="flex-1 flex overflow-hidden">
         <Sidebar />
-        {view === "dashboard" ? <Dashboard /> : view === "tasks" ? <TasksView /> : view === "monitors" ? <MonitorsView /> : <ChatPanel />}
+        {view === "dashboard" ? <Dashboard /> : view === "workspaces" ? <WorkspacesView /> : view === "tasks" ? <TasksView /> : view === "monitors" ? <MonitorsView /> : <ChatPanel />}
       </div>
 
       {/* Status Bar */}

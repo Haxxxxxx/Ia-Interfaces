@@ -184,10 +184,22 @@ export const TOOL_SCHEMAS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "RememberProject",
+      description: "Record a durable fact about THIS codebase to your project memory (.rodeo/memory.md): architecture, conventions, key files, gotchas, decisions. Call it whenever you learn something worth remembering for next time. Your memory is loaded into context every session.",
+      parameters: {
+        type: "object",
+        required: ["note"],
+        properties: { note: { type: "string", description: "A concise fact/insight to remember about this project" } },
+      },
+    },
+  },
 ];
 
-/** Tools that only read state or manage the in-app queue — safe to auto-run. */
-export const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "List", "TaskList", "TaskAdd", "TaskUpdate"]);
+/** Tools that only read state, manage the queue, or write project memory — safe to auto-run. */
+export const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "List", "TaskList", "TaskAdd", "TaskUpdate", "RememberProject"]);
 
 /** Tools that change the filesystem or run commands — gated by approval. */
 export const MUTATING_TOOLS = new Set(["Write", "Edit", "MultiEdit", "Bash"]);
@@ -234,6 +246,10 @@ Telling the user "run this command" or "I'll apply this change" or showing a \`\
 - After changing code, VERIFY with Bash (e.g. \`python -m py_compile\`, \`npx tsc --noEmit\`, \`npm test\`) and fix what you broke.
 - Make the smallest change that solves the problem. Match the surrounding code style.
 - Work step by step: explore → plan → edit (via tools) → verify. Keep going until done.
+
+## Project memory
+- Your accumulated knowledge of this codebase is loaded above (from .rodeo/memory.md). Trust it and build on it — don't re-discover what you already noted.
+- Whenever you learn something durable (architecture, where things live, conventions, gotchas, decisions), call **RememberProject** to save it so future sessions know it too.
 ${autonomyBlock}
 ## Output
 - Be concise. Lead with what you did. Show diffs/snippets, not whole files.
