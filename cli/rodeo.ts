@@ -1453,10 +1453,11 @@ const PROJECT_ROOT = detectProjectRoot();
  * Check if a path is within the project root
  */
 function isWithinProject(filePath: string): boolean {
-  const resolvedPath = path.resolve(PROJECT_ROOT, filePath);
-  const normalizedProject = path.normalize(PROJECT_ROOT);
-  const normalizedPath = path.normalize(resolvedPath);
-  return normalizedPath.startsWith(normalizedProject);
+  const normalizedProject = path.normalize(PROJECT_ROOT).replace(/[/\\]$/, "");
+  const normalizedPath = path.normalize(path.resolve(PROJECT_ROOT, filePath));
+  // Must BE the root or sit under it — guard against the sibling-prefix trap
+  // ("/x/project-evil" must not count as inside "/x/project").
+  return normalizedPath === normalizedProject || normalizedPath.startsWith(normalizedProject + path.sep);
 }
 
 /**
@@ -1483,6 +1484,21 @@ function resolveProjectPath(filePath: string): string {
     return PROJECT_ROOT;
   }
   return resolved;
+}
+
+/**
+ * Hard sandbox guard for WRITES. When an auto-approve mode is on (no human is
+ * confirming each action), refuse to write/edit OUTSIDE the project — the same
+ * boundary the desktop's pathGuard enforces, and one that even CONFIG.autoApprove
+ * (which otherwise bypasses every confirmation) cannot override. In manual mode
+ * we return null: the confirmation prompt shows the path and the user decides.
+ */
+function guardWritePath(filePath: string): string | null {
+  if (!CONFIG.autoApprove && !CONFIG.batchAutoApprove) return null;
+  const target = path.resolve(process.cwd(), filePath);
+  if (isWithinProject(target)) return null;
+  return `${c.red}Blocked:${c.reset} refusing to write outside the project while auto-approve is on.\n` +
+    `${c.dim}Target:  ${target}\nProject: ${PROJECT_ROOT}\nDisable /auto (and batch auto-approve) to confirm out-of-project writes manually.${c.reset}`;
 }
 
 /**
@@ -7710,6 +7726,10 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
         break;
       }
 
+      // Hard sandbox guard (auto-approve modes can't write outside the project).
+      const writeBlocked = guardWritePath(filePath);
+      if (writeBlocked) { result = writeBlocked; recordFailure(normalizedName, args, "outside project"); break; }
+
       // Check for sensitive files that need extra confirmation
       const fileName = path.basename(filePath).toLowerCase();
       const sensitivePatterns = [".env", "credentials", "secrets", ".pem", ".key", "id_rsa", "config.json", ".npmrc", ".pypirc"];
@@ -7746,6 +7766,10 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
     case "edit_file": {
       const oldStr = args.old_string || args.old_str;
       const newStr = args.new_string || args.new_str;
+
+      // Hard sandbox guard (auto-approve modes can't edit outside the project).
+      const editBlocked = guardWritePath(filePath);
+      if (editBlocked) { result = editBlocked; recordFailure(normalizedName, args, "outside project"); break; }
 
       if (!oldStr) {
         result = `${c.red}Error:${c.reset} Missing old_string. The model must specify exact text to replace.`;
@@ -9984,12 +10008,17 @@ async function chat(userInput: string): Promise<void> {
           console.log(`${c.yellow}Cancelled${c.reset}`);
         }
       } else if (error.code === "ECONNREFUSED" || error.cause?.code === "ECONNREFUSED") {
-        console.log(`${c.red}Cannot connect${c.reset} to ${CONFIG.apiUrl}`);
-        console.log(`${c.dim}Start server: cd app && npm run dev${c.reset}`);
+        if (CONFIG.local) {
+          console.log(`${c.red}Cannot reach Ollama${c.reset} at ${CONFIG.ollamaUrl || "http://localhost:11434"}`);
+          console.log(`${c.dim}Start it with ${c.reset}ollama serve${c.dim}, then make sure ${CONFIG.model} is pulled.${c.reset}`);
+        } else {
+          console.log(`${c.red}Cannot connect${c.reset} to ${CONFIG.apiUrl}`);
+          console.log(`${c.dim}Start server: cd app && npm run dev${c.reset}`);
+        }
       } else if (error.message?.includes("ECONNRESET")) {
-        console.log(`${c.yellow}Connection reset${c.reset}`);
+        console.log(`${c.yellow}Connection reset${c.reset}${CONFIG.local ? ` ${c.dim}— Ollama may have crashed or run out of memory; try a smaller model (/model).${c.reset}` : ""}`);
       } else if (error.message?.includes("fetch failed")) {
-        console.log(`${c.red}Network error${c.reset}`);
+        console.log(`${c.red}Network error${c.reset}${CONFIG.local ? ` ${c.dim}— is Ollama running? (ollama serve)${c.reset}` : ""}`);
       } else {
         console.log(`${c.red}Error:${c.reset} ${error.message}`);
       }
