@@ -147,7 +147,7 @@ export function ChatPanel() {
     setStatus(`Auditing with ${model}…`);
     addMessage(activeInstance.id, { role: "user", content: `🔍 Audit project (using ${model})` });
     try {
-      await runLocal(prompt, { model });
+      await runLocal(prompt, { model, audit: true });
     } catch (error) {
       addMessage(activeInstance.id, { role: "assistant", content: `Error: ${error instanceof Error ? error.message : String(error)}` });
     } finally {
@@ -172,7 +172,7 @@ export function ChatPanel() {
     setStatus(`Enhancing with ${model}…`);
     addMessage(activeInstance.id, { role: "user", content: `✨ Enhance project (using ${model})` });
     try {
-      await runLocal(prompt, { model, maxIterations: 30 });
+      await runLocal(prompt, { model, maxIterations: 30, audit: true });
     } catch (error) {
       addMessage(activeInstance.id, { role: "assistant", content: `Error: ${error instanceof Error ? error.message : String(error)}` });
     } finally {
@@ -181,7 +181,7 @@ export function ChatPanel() {
     }
   }
 
-  async function runLocal(userText: string, opts: { model?: string; maxIterations?: number } = {}) {
+  async function runLocal(userText: string, opts: { model?: string; maxIterations?: number; audit?: boolean } = {}) {
     if (!ollamaUp) {
       addMessage(activeInstance!.id, {
         role: "assistant",
@@ -190,7 +190,7 @@ export function ChatPanel() {
       return;
     }
     const ctx = await getContext();
-    const system = buildSystemPrompt(ctx, workingDirectory, { learned: learnedProfile });
+    const system = buildSystemPrompt(ctx, workingDirectory, { learned: learnedProfile, audit: opts.audit });
     const history = buildHistory(system, userText);
 
     const abort = new AbortController();

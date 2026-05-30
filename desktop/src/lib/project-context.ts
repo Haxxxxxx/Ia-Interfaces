@@ -2,13 +2,31 @@ import { invoke } from "@tauri-apps/api/core";
 
 interface ShellOutput { stdout: string; stderr: string; exit_code: number }
 
+// Short-lived per-cwd cache. Gathering context spawns ~3 shells + 7 file reads;
+// monitors / the autonomous loop call this repeatedly, so within a few seconds
+// it's the same answer. ChatPanel keeps its own UI-level cache too — this just
+// makes the lib-level callers (monitors, autonomous, memory) cheap as well.
+const CTX_TTL_MS = 30_000;
+const ctxCache = new Map<string, { ctx: string; at: number }>();
+
+/** Drop the cached context for a cwd (e.g. right after Rodeo edits files). */
+export function invalidateProjectContext(cwd?: string): void {
+  if (cwd) ctxCache.delete(cwd);
+  else ctxCache.clear();
+}
+
 /**
  * Gather lightweight project context so Rodeo codes in-context, like a
  * CLAUDE.md-aware agent. Best-effort: every probe is wrapped, missing data
- * is simply omitted. Runs fully offline.
+ * is simply omitted. Runs fully offline. Cached per-cwd for CTX_TTL_MS; pass
+ * `{ force: true }` to re-probe (e.g. after the working tree changed).
  */
-export async function gatherProjectContext(cwd: string): Promise<string> {
+export async function gatherProjectContext(cwd: string, opts: { force?: boolean } = {}): Promise<string> {
   if (!cwd) return "";
+
+  const cached = ctxCache.get(cwd);
+  if (!opts.force && cached && Date.now() - cached.at < CTX_TTL_MS) return cached.ctx;
+
   const parts: string[] = [];
 
   // Rodeo's own project memory — highest priority, his accumulated knowledge.
@@ -45,7 +63,9 @@ export async function gatherProjectContext(cwd: string): Promise<string> {
   const ls = await tryShell("ls -1A 2>/dev/null | grep -v node_modules | head -40", cwd);
   if (ls.trim()) parts.push(`### Top-level files\n${ls.trim()}`);
 
-  return parts.join("\n\n");
+  const ctx = parts.join("\n\n");
+  ctxCache.set(cwd, { ctx, at: Date.now() });
+  return ctx;
 }
 
 async function tryRead(path: string): Promise<string | null> {

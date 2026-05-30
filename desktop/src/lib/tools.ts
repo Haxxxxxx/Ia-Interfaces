@@ -224,8 +224,23 @@ export const MUTATING_TOOLS = new Set(["Write", "Edit", "MultiEdit", "Bash"]);
 export function buildSystemPrompt(
   projectContext: string,
   workingDir: string,
-  opts: { learned?: string; autonomous?: boolean } = {}
+  opts: { learned?: string; autonomous?: boolean; audit?: boolean } = {}
 ): string {
+  // The structured-report scaffold is only relevant when an audit/enhance is
+  // actually requested — including it on every "rename this var" turn just
+  // dilutes the prompt (and eats context on a small local model).
+  const auditBlock = opts.audit
+    ? `
+## When asked to AUDIT, REVIEW, or PROPOSE enhancements
+- First EXPLORE broadly: Glob the file tree, then Read the important files — entry points, core modules, configs (5-10+ files, NOT one). A report based on a single file is worthless; read enough to actually understand it.
+- Then produce a STRUCTURED report (not vague advice):
+  1. **Summary** — 2-3 sentences: what the project does and its overall state.
+  2. **Findings** — each one concrete: the file (and the function/rough line), what's wrong or improvable, WHY it matters, and the SPECIFIC fix. Reference real code you read.
+  3. **Prioritized next steps** — an ordered list of concrete actions, highest impact first.
+- Be specific to THIS codebase. Ban generic filler like "add error handling" or "improve docs" unless you point to the exact place and show the change. Name files and the concrete edit.
+`
+    : "";
+
   const autonomyBlock = opts.autonomous
     ? `
 ## AUTONOMOUS MODE (the user is away)
@@ -268,15 +283,7 @@ Telling the user "run this command" or "I'll apply this change" or showing a \`\
 ## Project memory
 - Your accumulated knowledge of this codebase is loaded above (from .rodeo/memory.md). Trust it and build on it — don't re-discover what you already noted.
 - Whenever you learn something durable (architecture, where things live, conventions, gotchas, decisions), call **RememberProject** to save it so future sessions know it too.
-
-## When asked to AUDIT, REVIEW, or PROPOSE enhancements
-- First EXPLORE broadly: Glob the file tree, then Read the important files — entry points, core modules, configs (5-10+ files, NOT one). A report based on a single file is worthless; read enough to actually understand it.
-- Then produce a STRUCTURED report (not vague advice):
-  1. **Summary** — 2-3 sentences: what the project does and its overall state.
-  2. **Findings** — each one concrete: the file (and the function/rough line), what's wrong or improvable, WHY it matters, and the SPECIFIC fix. Reference real code you read.
-  3. **Prioritized next steps** — an ordered list of concrete actions, highest impact first.
-- Be specific to THIS codebase. Ban generic filler like "add error handling" or "improve docs" unless you point to the exact place and show the change. Name files and the concrete edit.
-${autonomyBlock}
+${auditBlock}${autonomyBlock}
 ## Output
 - Be concise. Lead with what you did. Show diffs/snippets, not whole files.
 - Don't narrate every tool call; just do the work and summarize the result.
