@@ -6,7 +6,7 @@
  * via the Tauri-native executor, feeds results back, and iterates until the
  * model stops calling tools — same shape as a Claude Code turn.
  */
-import { streamOllamaChat, type ChatMessage, type ToolCall } from "./ollama";
+import { streamOllamaChat, NUM_CTX, type ChatMessage, type ToolCall } from "./ollama";
 import { TOOL_SCHEMAS } from "./tools";
 import { executeTool, isReadOnly, describeTool, computeEdit, makeDiff } from "./tool-executor";
 
@@ -42,6 +42,34 @@ function extractJsonObjects(text: string): any[] {
 
 // Known tool names (lowercased) — reject prose JSON that merely looks tool-shaped.
 const KNOWN_TOOL_NAMES = new Set(TOOL_SCHEMAS.map((t) => t.function.name.toLowerCase()));
+
+/**
+ * Keep the history within num_ctx so a deep task doesn't overflow the window and
+ * silently evict the system prompt + tool defs (which makes the model stop
+ * calling tools). Elides the content of OLD tool results in place (escalating
+ * how few it keeps full), never dropping messages, so the assistant↔tool pairing
+ * stays valid. Mutates `messages` directly (the loop owns the array).
+ */
+function trimHistoryInPlace(messages: ChatMessage[]): void {
+  const budgetChars = NUM_CTX * 0.65 * 4; // ~65% of the window for history
+  const size = () => messages.reduce((n, m) =>
+    n + (typeof m.content === "string" ? m.content.length : 0) +
+    (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0), 0);
+  if (size() <= budgetChars) return;
+
+  for (const keepFull of [8, 4, 2, 0]) {
+    const toolPos: number[] = [];
+    messages.forEach((m, i) => { if (m.role === "tool") toolPos.push(i); });
+    const stale = new Set(toolPos.slice(0, Math.max(0, toolPos.length - keepFull)));
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (!stale.has(i) || m.role !== "tool" || typeof m.content !== "string") continue;
+      if (m.content.length <= 400 || m.content.startsWith("[elided")) continue;
+      m.content = `[elided — ${m.content.length} chars; re-run the tool if you need this again]`;
+    }
+    if (size() <= budgetChars) break;
+  }
+}
 
 function parseToolCallsFromText(content: string): ToolCall[] {
   if (!content) return [];
@@ -113,6 +141,9 @@ export async function runAgent(
 
   for (let iter = 0; iter < maxIter; iter++) {
     cb.onIteration?.(iter + 1);
+
+    // Keep history within the context window before each turn.
+    trimHistoryInPlace(messages);
 
     let content = "";
     let reasoning = "";
