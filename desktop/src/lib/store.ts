@@ -188,10 +188,9 @@ export const useStore = create<AppState>()(
       // Offline brain — default to fully-local operation
       mode: "local",
       setMode: (mode) => set({ mode }),
-      // 14b is much more reliable at agentic editing than 7b (7b narrates /
-      // drops tool calls). Instruct models tool-call cleanly; -coder variants
-      // emit tool calls as text, so avoid them for the agent loop.
-      localModel: "qwen2.5:14b",
+      // Default to the code-specialized 14b (best for editing, fits 24GB).
+      // Coder models emit tool calls as text; the desktop agent recovers those.
+      localModel: "qwen2.5-coder:14b",
       setLocalModel: (localModel) => set({ localModel }),
       autoApprove: false,
       setAutoApprove: (autoApprove) => set({ autoApprove }),
@@ -391,6 +390,25 @@ export const useStore = create<AppState>()(
     }),
     {
       name: "rodeo-storage",
+      version: 1,
+      // One-time bump: move existing installs off the old instruct default onto
+      // the code-specialized model the user chose. Leaves deliberate choices
+      // (32b/7b/coder) and the tuned model alone.
+      migrate: (persisted: any, version: number) => {
+        if (version < 1 && persisted) {
+          const NEW = "qwen2.5-coder:14b";
+          // Switch plain qwen base models (incl. the now-removed 32b) to coder:14b;
+          // leave rodeo:tuned and any deliberate coder choice alone.
+          const swap = (m: string) => (/^qwen2\.5:(7b|14b|32b|72b)$/.test(m || "") ? NEW : m);
+          if (persisted.localModel) persisted.localModel = swap(persisted.localModel);
+          if (Array.isArray(persisted.workspaces)) {
+            persisted.workspaces = persisted.workspaces.map((w: any) =>
+              w?.model ? { ...w, model: swap(w.model) } : w
+            );
+          }
+        }
+        return persisted;
+      },
       partialize: (state) => ({
         apiKey: state.apiKey,
         apiUrl: state.apiUrl,
