@@ -3706,6 +3706,35 @@ function endToolDisplay(): void {
 
 // Parse JSON tool calls from content when model outputs them as text
 // This handles Ollama models that don't support OpenAI-style tool_calls
+// Canonical tokens for every tool Rodeo can execute (lowercased, punctuation
+// stripped) so we can recognize whatever casing/shape a local model emits.
+const KNOWN_TOOL_TOKENS = new Set([
+  "read", "readfile", "edit", "editfile", "multiedit", "write", "writefile",
+  "bash", "shell", "shellexec", "run", "runcommand", "glob", "searchfiles",
+  "grep", "list", "listdirectory", "ls", "tree", "finddeepest", "analyze",
+  "typecheck", "websearch", "search", "webfetch", "fetch", "fetchurl", "task",
+  "askuser", "askuserquestion", "todocreate", "todoupdate", "todolist", "todoget",
+]);
+const toolToken = (n: string): string => n.toLowerCase().replace(/[^a-z]/g, "");
+
+// Turn a loosely-shaped JSON object into a tool call, tolerating the key
+// variations weak models use ({tool|function|action}, {args|parameters|input}).
+// Returns null unless the name maps to a real, known tool — so prose JSON
+// that merely looks tool-shaped doesn't get executed.
+function coerceToolCall(obj: any, idx: number): any | null {
+  if (!obj || typeof obj !== "object") return null;
+  const rawName = obj.name ?? obj.tool ?? obj.function ?? obj.tool_name ?? obj.action;
+  if (typeof rawName !== "string" || !KNOWN_TOOL_TOKENS.has(toolToken(rawName))) return null;
+  const rawArgs = obj.arguments ?? obj.args ?? obj.parameters ?? obj.input ?? obj.tool_input ?? obj.params ?? {};
+  return {
+    id: `parsed_${idx}_${Date.now()}`,
+    function: {
+      name: rawName,
+      arguments: typeof rawArgs === "string" ? rawArgs : JSON.stringify(rawArgs),
+    },
+  };
+}
+
 function parseToolCallsFromContent(content: string): any[] {
   if (!content) return [];
 
@@ -3721,15 +3750,8 @@ function parseToolCallsFromContent(content: string): any[] {
     // Try to parse multiple JSON objects from the block (one per line or concatenated)
     const jsonObjects = extractJsonObjects(blockContent);
     for (const obj of jsonObjects) {
-      if (obj.name && obj.arguments) {
-        toolCalls.push({
-          id: `parsed_${toolCalls.length}_${Date.now()}`,
-          function: {
-            name: obj.name,
-            arguments: JSON.stringify(obj.arguments),
-          },
-        });
-      }
+      const tc = coerceToolCall(obj, toolCalls.length);
+      if (tc) toolCalls.push(tc);
     }
   }
 
@@ -3738,15 +3760,8 @@ function parseToolCallsFromContent(content: string): any[] {
   if (toolCalls.length === 0) {
     const standaloneObjects = extractJsonObjects(content);
     for (const obj of standaloneObjects) {
-      if (obj.name && obj.arguments) {
-        toolCalls.push({
-          id: `parsed_${toolCalls.length}_${Date.now()}`,
-          function: {
-            name: obj.name,
-            arguments: JSON.stringify(obj.arguments),
-          },
-        });
-      }
+      const tc = coerceToolCall(obj, toolCalls.length);
+      if (tc) toolCalls.push(tc);
     }
   }
 
@@ -7729,14 +7744,37 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
 
       result = editFile(filePath, oldStr, newStr, args.replace_all || false);
 
-      // Smart error recovery: if edit failed, auto-read the file and include fresh content
+      // Smart error recovery: if edit failed, show a WINDOW around the best match
+      // (not the whole file — dumping a 12k-line file into context slows every
+      // later turn and can overflow the model's window).
       if (result.includes("not found") || result.includes("String not found")) {
         recordFailure(normalizedName, args, result.slice(0, 100));
 
-        // Auto-read the file so model has fresh content
-        console.log(`\n${c.yellow}↻${c.reset} ${c.dim}Auto-reading file for recovery...${c.reset}`);
-        const freshContent = readFile(filePath);
-        result += `\n\n${c.cyan}[AUTO-RECOVERY]${c.reset} Here is the current file content. Find the EXACT text you want to replace:\n\n${freshContent}`;
+        console.log(`\n${c.yellow}↻${c.reset} ${c.dim}Auto-reading nearby lines for recovery...${c.reset}`);
+        const recoveryFull = path.resolve(process.cwd(), filePath);
+        let snippet: string;
+        try {
+          const allLines = fs.readFileSync(recoveryFull, "utf-8").split("\n");
+          // Anchor on the first distinctive line of the failed old_string.
+          const anchor = (oldStr.split("\n").find((l: string) => l.trim().length > 3) || "").trim();
+          let hit = -1;
+          if (anchor) {
+            const needle = anchor.replace(/^\s*\d+\s*[→│|:]\s?/, ""); // tolerate pasted line numbers
+            hit = allLines.findIndex((l: string) => l.includes(needle) || l.trim() === needle);
+          }
+          if (hit >= 0) {
+            const from = Math.max(1, hit - 12);
+            const to = Math.min(allLines.length, hit + 14);
+            snippet = readFile(filePath, from, to - from + 1);
+          } else {
+            // No anchor match — a small head is enough to re-orient + a grep hint.
+            snippet = readFile(filePath, 1, 50) +
+              `\n${c.dim}(no line matched your old_string — use Grep to locate the exact text, then copy it verbatim)${c.reset}`;
+          }
+        } catch {
+          snippet = readFile(filePath, 1, 50);
+        }
+        result += `\n\n${c.cyan}[AUTO-RECOVERY]${c.reset} Current lines near your target — copy the EXACT text (no line numbers) into old_string:\n\n${snippet}`;
       } else if (!result.includes("Error:")) {
         // Edit succeeded! Store the solution for future reference
         try {
@@ -9578,6 +9616,7 @@ async function chatWithImage(prompt: string, imageDataUrl: string): Promise<void
           agentic: false,
           max_tokens: CONFIG.speedMode ? 2048 : CONFIG.maxTokens,
           temperature: CONFIG.speedMode ? 0.1 : 0.3,
+          ...(CONFIG.local ? { keep_alive: "30m" } : {}),
         }),
         signal: currentAbortController.signal,
       },
@@ -9700,8 +9739,11 @@ async function chat(userInput: string): Promise<void> {
             project_root: process.cwd(),
             agentic: false,
             agent: currentAgent, // Send current agent to server
-            temperature: CONFIG.speedMode ? 0.1 : 0.3,
+            temperature: CONFIG.speedMode ? 0.1 : 0.2,
             max_tokens: CONFIG.speedMode ? 2048 : CONFIG.maxTokens,
+            // Keep the local model resident between turns (Ollama honors this on
+            // the OpenAI endpoint) — avoids a multi-second cold reload each turn.
+            ...(CONFIG.local ? { keep_alive: "30m" } : {}),
           }),
           signal: currentAbortController.signal,
         },
@@ -10209,6 +10251,18 @@ function printStartupTip(): void {
   console.log(randomTip);
 }
 
+// Fire-and-forget: preload the configured model into memory with a long
+// keep_alive so the first user turn is instant. Failures are silent — this is
+// pure optimization and must never block or crash startup.
+function warmModel(): void {
+  const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
+  fetch(`${base}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: CONFIG.model, prompt: "", keep_alive: "30m" }),
+  }).catch(() => {});
+}
+
 async function main() {
   // Handle CLI arguments
   if (handleArgs()) return;
@@ -10225,6 +10279,10 @@ async function main() {
 
   // Print system status (GPU, Ollama)
   await printSystemStatus();
+
+  // Warm the local model into VRAM now (non-blocking) so the first real turn
+  // doesn't pay the cold-load. Empty prompt loads weights without generating.
+  if (CONFIG.local) warmModel();
 
   // Session info on one line
   const sessionInfo = SESSION_NAME ? `  ${c.dim}│${c.reset} ${c.cyan}${SESSION_NAME}${c.reset}` : "";
