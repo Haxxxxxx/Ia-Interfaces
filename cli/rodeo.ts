@@ -6943,10 +6943,24 @@ function printToolResult(normalizedName: string, result: string): void {
     return;
   }
 
-  const isError = /^\x1b\[[0-9;]*m?Error:|Error:|not found|✗/.test(stripAnsi(trimmed).slice(0, 40)) || /Error:|not found/.test(stripAnsi(trimmed));
+  const isError = /Error:|not found/.test(stripAnsi(trimmed));
   const lines = trimmed.split("\n");
   const hasAnsi = /\x1b\[/.test(trimmed);
   const paint = (s: string) => (hasAnsi ? s : `${c.dim}${s}${c.reset}`);
+
+  // Edit returns "Updated <file>\n\n<diff>" — header on the branch, the
+  // pre-guttered diff indented lightly underneath so its own │ column stays put.
+  if (!isError && normalizedName === "edit_file" && /\n\s*\n/.test(trimmed)) {
+    const [header, ...rest] = trimmed.split(/\n\s*\n/);
+    const diffLines = rest.join("\n\n").split("\n");
+    console.log(`${branch}${c.gray}${stripAnsi(header).trim()}${c.reset}`);
+    const max = 30;
+    const shown = diffLines.slice(0, max);
+    for (const line of shown) console.log(`  ${line}`);
+    const over = diffLines.length - shown.length;
+    if (over > 0) console.log(`  ${c.dim}… +${over} line${over === 1 ? "" : "s"}${c.reset}`);
+    return;
+  }
 
   // One-line summaries for read/search tools — the body is noise on screen.
   const n = lines.length;
