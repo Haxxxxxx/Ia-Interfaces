@@ -1036,7 +1036,11 @@ const failedAttempts: Map<string, FailedAttempt> = new Map();
 const MAX_SAME_FAILURE = 2; // Max times to retry same failed action
 
 function hashArgs(args: Record<string, any>): string {
-  return JSON.stringify(args).slice(0, 200);
+  // Ignore pagination / window keys so re-reading the SAME file at different
+  // offsets (paging thrash) is recognized as the same call by loop detection.
+  const { offset, limit, head_limit, start_line, end_line, ...stable } = args || {};
+  void offset; void limit; void head_limit; void start_line; void end_line;
+  return JSON.stringify(stable).slice(0, 200);
 }
 
 function recordFailure(tool: string, args: Record<string, any>, error: string): void {
@@ -1339,7 +1343,10 @@ async function pickStrongestFittingModel(): Promise<string> {
     if (res.ok) tags = ((await res.json()) as { models?: any[] }).models || [];
   } catch { /* offline / no daemon */ }
   if (!tags.length) return CONFIG.model;
-  const score = (n: string) => { const sz = n.match(/(\d+)\s*b/i); return sz ? parseInt(sz[1]) : (/rodeo/i.test(n) ? 15 : 8); };
+  // Anchor on the parameter tag (e.g. :14b, -7b, :1.3b) so we don't pick up a
+  // stray digit from the family name (llama3.2 must not score as 3 or 2), and
+  // keep decimals (1.3b → 1.3) so a 1.3B never outranks a 7B.
+  const score = (n: string) => { const sz = n.match(/[:\-](\d+(?:\.\d+)?)\s*b\b/i); return sz ? parseFloat(sz[1]) : (/rodeo/i.test(n) ? 15 : 8); };
   const fits = (m: { size?: number }) => (m.size || 0) <= budget;
   const usable = tags.filter((m) => modelSupportsTools(m.name) && !/coder/i.test(m.name) && fits(m));
   const pool = usable.length ? usable : tags.filter(fits);
