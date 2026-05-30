@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../lib/store";
-import { modelSupportsTools, listLocalModels, isOllamaUp, type OllamaModel } from "../lib/ollama";
+import { modelSupportsTools, listLocalModels, isOllamaUp, getTotalRamBytes, modelFits, type OllamaModel } from "../lib/ollama";
 
 interface ModelSelectorProps {
   isOpen: boolean;
@@ -18,6 +18,7 @@ export function ModelSelector({ isOpen, onClose }: ModelSelectorProps) {
   const [models, setModels] = useState<OllamaModel[]>([]);
   const [pullName, setPullName] = useState("");
   const [busy, setBusy] = useState("");
+  const [ram, setRam] = useState(0);
 
   async function refresh() {
     try {
@@ -26,7 +27,7 @@ export function ModelSelector({ isOpen, onClose }: ModelSelectorProps) {
       setOllama({ up: true, models: m.map((x) => x.name) });
     } catch { setModels([]); }
   }
-  useEffect(() => { if (isOpen && ollamaUp) refresh(); }, [isOpen, ollamaUp]);
+  useEffect(() => { if (isOpen && ollamaUp) { refresh(); getTotalRamBytes().then(setRam); } }, [isOpen, ollamaUp]);
 
   if (!isOpen) return null;
 
@@ -75,19 +76,24 @@ export function ModelSelector({ isOpen, onClose }: ModelSelectorProps) {
           {models.length === 0 && <div className="text-sm text-terminal-muted text-center py-6">No models found.</div>}
           {models.map((m) => {
             const tools = modelSupportsTools(m.name) && !/coder/i.test(m.name);
+            const fits = modelFits(m.size, ram);
             return (
-              <div key={m.name} className={`group w-full flex items-center gap-2 px-3 py-2.5 rounded ${localModel === m.name ? "bg-terminal-accent/15" : "hover:bg-terminal-bg"}`}>
+              <div key={m.name} className={`group w-full flex items-center gap-2 px-3 py-2.5 rounded ${localModel === m.name ? "bg-terminal-accent/15" : "hover:bg-terminal-bg"} ${!fits ? "opacity-60" : ""}`}>
                 <button onClick={() => select(m.name)} className="flex-1 text-left min-w-0">
                   <div className="flex items-center gap-2">
                     <span className={`font-medium text-sm truncate ${localModel === m.name ? "text-terminal-accent" : ""}`}>{localModel === m.name ? "▸ " : ""}{m.name}</span>
                   </div>
                   <div className="text-xs text-terminal-muted mt-0.5">
-                    {fmtSize(m.size)}{m.parameterSize ? ` · ${m.parameterSize}` : ""}{!tools && " · no tool-calling"}
+                    {fmtSize(m.size)}{m.parameterSize ? ` · ${m.parameterSize}` : ""}
+                    {!tools && " · no tool-calling"}
+                    {!fits && <span className="text-terminal-red"> · too big for your RAM (will swap)</span>}
                   </div>
                 </button>
-                {tools
-                  ? <span className="text-xs px-2 py-0.5 bg-terminal-accent/20 text-terminal-accent rounded shrink-0">tools</span>
-                  : <span className="text-xs px-2 py-0.5 bg-terminal-red/20 text-terminal-red rounded shrink-0">chat</span>}
+                {!fits
+                  ? <span className="text-xs px-2 py-0.5 bg-terminal-red/20 text-terminal-red rounded shrink-0">won't fit</span>
+                  : tools
+                    ? <span className="text-xs px-2 py-0.5 bg-terminal-accent/20 text-terminal-accent rounded shrink-0">tools</span>
+                    : <span className="text-xs px-2 py-0.5 bg-terminal-yellow/20 text-terminal-yellow rounded shrink-0">chat</span>}
                 <button onClick={() => remove(m.name)} className="opacity-0 group-hover:opacity-100 text-terminal-muted hover:text-terminal-red text-sm shrink-0" title="Delete model">🗑</button>
               </div>
             );

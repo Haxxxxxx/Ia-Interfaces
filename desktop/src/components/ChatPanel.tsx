@@ -5,7 +5,7 @@ import { runAgent, type ApprovalRequest } from "../lib/agent";
 import { buildSystemPrompt } from "../lib/tools";
 import { gatherProjectContext } from "../lib/project-context";
 import type { ChatMessage } from "../lib/ollama";
-import { pickStrongestModel } from "../lib/ollama";
+import { pickBestFittingModel, getTotalRamBytes, listLocalModels } from "../lib/ollama";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { Markdown } from "./Markdown";
 import { ToolApproval } from "./ToolCallUI";
@@ -21,7 +21,7 @@ export function ChatPanel() {
   const ctxCache = useRef<{ dir: string; ctx: string } | null>(null);
 
   const {
-    apiKey, mode, localModel, autoApprove, ollamaUp, learnedProfile, ollamaModels,
+    apiKey, mode, localModel, autoApprove, ollamaUp, learnedProfile,
     workingDirectory, setWorkingDirectory,
     instances, activeInstanceId, addMessage, updateLastMessage, addMetric,
   } = useStore();
@@ -105,13 +105,19 @@ export function ChatPanel() {
     }
   }
 
+  // Strongest installed tool-model that actually fits this machine's RAM.
+  async function strongestFittingModel(): Promise<string> {
+    const [ram, installed] = await Promise.all([getTotalRamBytes(), listLocalModels().catch(() => [])]);
+    return installed.length ? pickBestFittingModel(installed, ram) : localModel;
+  }
+
   async function runAudit() {
     if (!activeInstance || isStreaming) return;
     if (mode !== "local") { setStatus("Audit runs in local mode."); return; }
     if (!ollamaUp) { setStatus("Ollama is offline."); return; }
     if (!workingDirectory) { setStatus("Set a working directory first."); return; }
 
-    const model = pickStrongestModel(ollamaModels);
+    const model = await strongestFittingModel();
     const prompt =
       "Audit this codebase. First EXPLORE broadly — Glob the file tree and Read the important files (entry points, core modules, configs; 5-10+ files, not one). Then produce a structured report:\n" +
       "1. Summary — what it does and overall state.\n" +
@@ -138,7 +144,7 @@ export function ChatPanel() {
     if (!ollamaUp) { setStatus("Ollama is offline."); return; }
     if (!workingDirectory) { setStatus("Set a working directory first."); return; }
 
-    const model = pickStrongestModel(ollamaModels);
+    const model = await strongestFittingModel();
     const prompt =
       "Enhance this codebase end-to-end. First AUDIT: explore broadly (Glob the tree, Read 5-10+ key files) and identify the top 2-3 highest-impact improvements. " +
       "Then IMPLEMENT them — actually make the changes with Edit/MultiEdit/Write (do not just propose code). After each change, verify it (read it back, or run a check with Bash). " +

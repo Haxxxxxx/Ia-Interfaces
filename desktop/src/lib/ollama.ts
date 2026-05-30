@@ -86,17 +86,41 @@ export function modelSupportsTools(model: string): boolean {
   return TOOL_CAPABLE.some((m) => lower.includes(m));
 }
 
+function nameScore(name: string): number {
+  const sz = name.match(/(\d+)\s*b/i);
+  if (sz) return parseInt(sz[1]);     // param count in billions
+  if (/rodeo/i.test(name)) return 15; // tuned model — decent middle
+  return 8;
+}
+
 /** Pick the most capable installed tool-using model (biggest param count). */
 export function pickStrongestModel(models: string[]): string {
-  const score = (m: string): number => {
-    const sz = m.match(/(\d+)\s*b/i);
-    if (sz) return parseInt(sz[1]);     // param count in billions
-    if (/rodeo/i.test(m)) return 15;    // tuned model — decent middle
-    return 8;
-  };
   const usable = models.filter((m) => modelSupportsTools(m) && !/coder/i.test(m));
   const pool = usable.length ? usable : models;
-  return [...pool].sort((a, b) => score(b) - score(a))[0] || models[0] || "qwen2.5:14b";
+  return [...pool].sort((a, b) => nameScore(b) - nameScore(a))[0] || models[0] || "qwen2.5:14b";
+}
+
+/** Total system RAM in bytes (via sysctl); 0 if unavailable. */
+export async function getTotalRamBytes(): Promise<number> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const o = await invoke<{ stdout: string }>("exec_shell", { command: "sysctl -n hw.memsize", cwd: "" });
+    return parseInt((o.stdout || "").trim()) || 0;
+  } catch { return 0; }
+}
+
+/** Does a model's on-disk size fit in RAM with headroom for the OS + app? */
+export function modelFits(sizeBytes: number, ramBytes: number): boolean {
+  if (!ramBytes) return true; // unknown RAM → don't block
+  return sizeBytes <= ramBytes * 0.65;
+}
+
+/** Strongest installed tool-model that actually FITS in the given RAM. */
+export function pickBestFittingModel(models: OllamaModel[], ramBytes: number): string {
+  const usable = models.filter((m) => modelSupportsTools(m.name) && !/coder/i.test(m.name) && modelFits(m.size, ramBytes));
+  const pool = usable.length ? usable : models.filter((m) => modelFits(m.size, ramBytes));
+  if (!pool.length) return models[0]?.name || "qwen2.5:7b";
+  return [...pool].sort((a, b) => nameScore(b.name) - nameScore(a.name))[0].name;
 }
 
 /** Non-streaming completion — used by the nightly self-update distiller. */

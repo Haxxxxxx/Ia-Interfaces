@@ -1309,6 +1309,27 @@ function chatUrl(): string {
   return CONFIG.local ? `${base}/v1/chat/completions` : `${CONFIG.apiUrl}/api/v1/chat/completions`;
 }
 
+/**
+ * Strongest installed tool-capable model that FITS in this machine's RAM.
+ * Used by /audit and /enhance so they never pick a model that swaps.
+ */
+async function pickStrongestFittingModel(): Promise<string> {
+  const budget = os.totalmem() * 0.65; // leave headroom for OS + app
+  let tags: Array<{ name: string; size?: number }> = [];
+  try {
+    const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
+    const res = await fetch(`${base}/api/tags`);
+    if (res.ok) tags = ((await res.json()) as { models?: any[] }).models || [];
+  } catch { /* offline / no daemon */ }
+  if (!tags.length) return CONFIG.model;
+  const score = (n: string) => { const sz = n.match(/(\d+)\s*b/i); return sz ? parseInt(sz[1]) : (/rodeo/i.test(n) ? 15 : 8); };
+  const fits = (m: { size?: number }) => (m.size || 0) <= budget;
+  const usable = tags.filter((m) => modelSupportsTools(m.name) && !/coder/i.test(m.name) && fits(m));
+  const pool = usable.length ? usable : tags.filter(fits);
+  if (!pool.length) return CONFIG.model;
+  return pool.sort((a, b) => score(b.name) - score(a.name))[0].name;
+}
+
 // ============================================
 // PROJECT ROOT DETECTION - Stay within project boundaries
 // ============================================
@@ -10514,17 +10535,7 @@ ${c.bold}Tips${c.reset}
 
         case "audit": {
           const scope = args.join(" ").trim();
-          const auditModels = await fetchAvailableModels();
-          const installed = auditModels.filter((m) => m.installed !== false).map((m) => m.id);
-          const score = (m: string): number => {
-            const sz = m.match(/(\d+)\s*b/i);
-            if (sz) return parseInt(sz[1]);
-            if (/rodeo/i.test(m)) return 15;
-            return 8;
-          };
-          const usable = installed.filter((m) => modelSupportsTools(m) && !/coder/i.test(m));
-          const pool = usable.length ? usable : installed;
-          const strongest = pool.sort((a, b) => score(b) - score(a))[0] || CONFIG.model;
+          const strongest = await pickStrongestFittingModel();
           const prevModel = CONFIG.model;
           if (strongest && strongest !== prevModel) {
             CONFIG.model = strongest;
@@ -10545,17 +10556,7 @@ Be specific to THIS code — no generic filler.`;
 
         case "enhance": {
           const scope = args.join(" ").trim();
-          const enhModels = await fetchAvailableModels();
-          const enhInstalled = enhModels.filter((m) => m.installed !== false).map((m) => m.id);
-          const enhScore = (m: string): number => {
-            const sz = m.match(/(\d+)\s*b/i);
-            if (sz) return parseInt(sz[1]);
-            if (/rodeo/i.test(m)) return 15;
-            return 8;
-          };
-          const enhUsable = enhInstalled.filter((m) => modelSupportsTools(m) && !/coder/i.test(m));
-          const enhPool = enhUsable.length ? enhUsable : enhInstalled;
-          const enhStrongest = enhPool.sort((a, b) => enhScore(b) - enhScore(a))[0] || CONFIG.model;
+          const enhStrongest = await pickStrongestFittingModel();
           const enhPrev = CONFIG.model;
           if (enhStrongest && enhStrongest !== enhPrev) {
             CONFIG.model = enhStrongest;

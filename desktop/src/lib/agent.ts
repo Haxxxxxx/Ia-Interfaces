@@ -141,6 +141,12 @@ export async function runAgent(
         });
         continue;
       }
+      // Empty response → tell the user instead of silently showing nothing.
+      if (!toolsUsed && !content.trim() && !reasoning.trim() && !proposedCode && !opts.signal?.aborted) {
+        const note = `⚠️ ${opts.model} returned an empty response. It may have failed to load, run low on memory (try a smaller model via ⌘M), or struggled with this request. Try again, or switch models.`;
+        assistantMsg.content = note;
+        cb.onContent?.(note);
+      }
       return messages;
     }
 
