@@ -10199,6 +10199,7 @@ ${c.bold}Integrations${c.reset}
   /hooks        Pre/post execution hooks
 
 ${c.bold}Settings${c.reset}
+  /audit [scope] Structured audit with your strongest model (auto-restores)
   /model <id>   Change model
   /models       List models
   /auto         Toggle auto-approve
@@ -10509,6 +10510,37 @@ ${c.bold}Tips${c.reset}
             console.log(`${c.dim}Use /models to list available, /model <id> to switch${c.reset}`);
           }
           break;
+
+        case "audit": {
+          const scope = args.join(" ").trim();
+          const auditModels = await fetchAvailableModels();
+          const installed = auditModels.filter((m) => m.installed !== false).map((m) => m.id);
+          const score = (m: string): number => {
+            const sz = m.match(/(\d+)\s*b/i);
+            if (sz) return parseInt(sz[1]);
+            if (/rodeo/i.test(m)) return 15;
+            return 8;
+          };
+          const usable = installed.filter((m) => modelSupportsTools(m) && !/coder/i.test(m));
+          const pool = usable.length ? usable : installed;
+          const strongest = pool.sort((a, b) => score(b) - score(a))[0] || CONFIG.model;
+          const prevModel = CONFIG.model;
+          if (strongest && strongest !== prevModel) {
+            CONFIG.model = strongest;
+            console.log(`${c.dim}↳ auditing with ${c.reset}${c.cyan}${strongest}${c.reset}${c.dim} (restoring ${prevModel} after)${c.reset}\n`);
+          }
+          const auditPrompt = `Audit ${scope || "this codebase"}. First EXPLORE broadly — Glob the file tree and Read the important files (entry points, core modules, configs; 5-10+ files, not one). Then produce a STRUCTURED report:
+1. Summary — what it does and overall state.
+2. Findings — each: file (and function/line), what's wrong or improvable, why it matters, the specific fix.
+3. Prioritized next steps — concrete actions, highest impact first.
+Be specific to THIS code — no generic filler.`;
+          try {
+            await chat(auditPrompt);
+          } finally {
+            CONFIG.model = prevModel; // restore the user's model
+          }
+          break;
+        }
 
         case "models":
           console.log(`\n${c.dim}Fetching models...${c.reset}`);

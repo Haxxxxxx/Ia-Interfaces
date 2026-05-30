@@ -5,6 +5,7 @@ import { runAgent, type ApprovalRequest } from "../lib/agent";
 import { buildSystemPrompt } from "../lib/tools";
 import { gatherProjectContext } from "../lib/project-context";
 import type { ChatMessage } from "../lib/ollama";
+import { pickStrongestModel } from "../lib/ollama";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { Markdown } from "./Markdown";
 import { ToolApproval } from "./ToolCallUI";
@@ -20,7 +21,7 @@ export function ChatPanel() {
   const ctxCache = useRef<{ dir: string; ctx: string } | null>(null);
 
   const {
-    apiKey, mode, localModel, autoApprove, ollamaUp, learnedProfile,
+    apiKey, mode, localModel, autoApprove, ollamaUp, learnedProfile, ollamaModels,
     workingDirectory, setWorkingDirectory,
     instances, activeInstanceId, addMessage, updateLastMessage, addMetric,
   } = useStore();
@@ -104,7 +105,34 @@ export function ChatPanel() {
     }
   }
 
-  async function runLocal(userText: string) {
+  async function runAudit() {
+    if (!activeInstance || isStreaming) return;
+    if (mode !== "local") { setStatus("Audit runs in local mode."); return; }
+    if (!ollamaUp) { setStatus("Ollama is offline."); return; }
+    if (!workingDirectory) { setStatus("Set a working directory first."); return; }
+
+    const model = pickStrongestModel(ollamaModels);
+    const prompt =
+      "Audit this codebase. First EXPLORE broadly — Glob the file tree and Read the important files (entry points, core modules, configs; 5-10+ files, not one). Then produce a structured report:\n" +
+      "1. Summary — what it does and overall state.\n" +
+      "2. Findings — each: file (and function/line), what's wrong or improvable, why it matters, the specific fix.\n" +
+      "3. Prioritized next steps — concrete actions, highest impact first.\n" +
+      "Be specific to THIS code — no generic filler.";
+
+    setIsStreaming(true);
+    setStatus(`Auditing with ${model}…`);
+    addMessage(activeInstance.id, { role: "user", content: `🔍 Audit project (using ${model})` });
+    try {
+      await runLocal(prompt, model);
+    } catch (error) {
+      addMessage(activeInstance.id, { role: "assistant", content: `Error: ${error instanceof Error ? error.message : String(error)}` });
+    } finally {
+      setIsStreaming(false);
+      setStatus("");
+    }
+  }
+
+  async function runLocal(userText: string, modelOverride?: string) {
     if (!ollamaUp) {
       addMessage(activeInstance!.id, {
         role: "assistant",
@@ -125,7 +153,7 @@ export function ChatPanel() {
     let reasoning = "";
     const id = activeInstance!.id;
 
-    await runAgent(history, { model: localModel, cwd: workingDirectory, autoApprove, signal: abort.signal }, {
+    await runAgent(history, { model: modelOverride || localModel, cwd: workingDirectory, autoApprove, signal: abort.signal }, {
       onIteration: (n) => setStatus(`Working… (step ${n})`),
       onContent: (delta) => {
         content += delta;
@@ -206,6 +234,15 @@ export function ChatPanel() {
           📁 {workingDirectory || "set working directory"}
         </button>
         {autoApprove && <span className="text-terminal-yellow">· auto-approve on</span>}
+        <span className="flex-1" />
+        <button
+          onClick={runAudit}
+          disabled={isStreaming || mode !== "local" || !ollamaUp || !workingDirectory}
+          title="Audit this project with your strongest model"
+          className="px-2.5 py-1 rounded border border-terminal-border hover:border-terminal-accent/50 hover:text-terminal-accent disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          🔍 Audit
+        </button>
       </div>
 
       {/* Messages */}

@@ -86,6 +86,19 @@ export function modelSupportsTools(model: string): boolean {
   return TOOL_CAPABLE.some((m) => lower.includes(m));
 }
 
+/** Pick the most capable installed tool-using model (biggest param count). */
+export function pickStrongestModel(models: string[]): string {
+  const score = (m: string): number => {
+    const sz = m.match(/(\d+)\s*b/i);
+    if (sz) return parseInt(sz[1]);     // param count in billions
+    if (/rodeo/i.test(m)) return 15;    // tuned model — decent middle
+    return 8;
+  };
+  const usable = models.filter((m) => modelSupportsTools(m) && !/coder/i.test(m));
+  const pool = usable.length ? usable : models;
+  return [...pool].sort((a, b) => score(b) - score(a))[0] || models[0] || "qwen2.5:14b";
+}
+
 /** Non-streaming completion — used by the nightly self-update distiller. */
 export async function ollamaComplete(messages: ChatMessage[], model: string, signal?: AbortSignal): Promise<string> {
   const res = await fetch(`${OLLAMA_URL}/v1/chat/completions`, {
