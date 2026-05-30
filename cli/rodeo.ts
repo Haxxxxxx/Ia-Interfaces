@@ -9658,16 +9658,17 @@ async function chat(userInput: string): Promise<void> {
           }
         }
 
-        // If the user asked for an edit but the model only narrated/proposed code
-        // without calling a tool, force it to actually act (not in read-only plan mode).
-        const proposedCode = /```/.test(content || "");
-        if (currentAgent !== "plan" && actionRequested && (proposedCode || totalToolCalls === 0) && nudgeCount < 2) {
+        // If the model is asking the user a question, STOP so they can answer.
+        // Otherwise force EXPLORATION (a read), not a write: if it just narrated
+        // without using any tool, make it look at the code first.
+        const isQuestion = /\?/.test(content || "");
+        if (currentAgent !== "plan" && actionRequested && totalToolCalls === 0 && !isQuestion && nudgeCount < 2) {
           nudgeCount++;
           messages.push({
             role: "system",
-            content: "STOP — you did not call any tool, so nothing changed. Writing code or steps in your message does NOT edit files. The user asked you to make the change. Read the target file if needed, then call Edit / Write / Bash NOW with the actual change. Do not explain, propose, or show code in prose — emit the tool call.",
+            content: "You responded without looking at the code. First use a READ tool (Read / Glob / Grep) to see the actual files — don't answer or ask from assumptions. After exploring, you may make the change with Edit/Write if you're sure, or ask the user ONE specific question if you still need details. Use a tool now.",
           });
-          console.log(`${c.dim}↳ no edit was made — retrying with action${c.reset}`);
+          console.log(`${c.dim}↳ exploring the code first${c.reset}`);
           continueLoop = true;
         } else {
           // Claude Code style: no timing after text responses

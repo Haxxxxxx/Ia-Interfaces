@@ -188,13 +188,18 @@ export async function runAgent(
     // narrated/proposed code instead of editing, force it to actually act.
     if (toolCalls.length === 0 || finishReason === "stop") {
       const proposedCode = /```/.test(content);
-      const shouldHaveActed = actionRequested && (proposedCode || !toolsUsed);
-      if (shouldHaveActed && nudges < 2 && !opts.signal?.aborted) {
+      // If the model is asking the user a clarifying question, STOP so they can
+      // answer — never keep looping/nudging on a question.
+      const isQuestion = /\?/.test(content);
+      // Otherwise force EXPLORATION (a read), not a write: if the model just
+      // narrated without looking at the code, make it use a read tool first.
+      const shouldExploreFirst = actionRequested && !toolsUsed && !isQuestion;
+      if (shouldExploreFirst && nudges < 2 && !opts.signal?.aborted) {
         nudges++;
         messages.push({
           role: "system",
           content:
-            "STOP — you did not call any tool, so NOTHING changed. Writing code or steps in your message does not edit files. The user asked you to make the change. Right now: Read the target file if you haven't, then call Edit / MultiEdit / Write (or Bash) with the ACTUAL change. Do not explain, propose, apologize, or show code in prose — emit the tool call this turn.",
+            "You responded without looking at the code. First USE A READ TOOL — Read / Glob / Grep — to see the actual files (don't answer or ask from assumptions). After exploring, you may make the change with Edit/Write if you're sure, or ask the user ONE specific question if you still need details. Use a tool now.",
         });
         continue;
       }
