@@ -2,9 +2,10 @@
  * Direct Ollama client — talks straight to the local Ollama daemon.
  * No Next.js server, no wifi. This is the offline brain's transport.
  *
- * Ollama exposes an OpenAI-compatible endpoint at /v1/chat/completions
- * (supports tool calling for qwen2.5, llama3.1+, mistral, etc.) and a
- * native API at /api/tags for model discovery.
+ * Chat runs over Ollama's NATIVE /api/chat endpoint (newline-delimited JSON),
+ * translated to/from the OpenAI shape the agent loop consumes — so we can set
+ * num_ctx + keep_alive in options (the OpenAI-compat endpoint ignores num_ctx).
+ * Model discovery uses /api/tags.
  */
 
 export const OLLAMA_URL = "http://localhost:11434";
@@ -127,22 +128,93 @@ export function pickBestFittingModel(models: OllamaModel[], ramBytes: number): s
   return [...pool].sort((a, b) => nameScore(b.name) - nameScore(a.name))[0].name;
 }
 
+// Context window for the native endpoint. The OpenAI-compat endpoint IGNORES
+// num_ctx (confirmed empirically — it caps at Ollama's small default), so we use
+// the native /api/chat endpoint, which honors it. 8192 gives the agent loop real
+// headroom for the system prompt + tools + a multi-turn conversation.
+export const NUM_CTX = 8192;
+
+/**
+ * Convert our OpenAI-shaped history into native /api/chat messages.
+ * Native differs in two ways that matter for the tool round-trip:
+ *  - tool-call arguments must be an OBJECT (the OpenAI shape carries a string),
+ *  - tool results are matched to calls by ORDER (no tool_call_id) and carry an
+ *    optional `tool_name` instead.
+ */
+function toNativeMessages(messages: ChatMessage[]): unknown[] {
+  return messages.map((m) => {
+    const out: Record<string, unknown> = { role: m.role, content: m.content ?? "" };
+    if (m.reasoning_content) out.thinking = m.reasoning_content;
+    if (m.tool_calls?.length) {
+      out.tool_calls = m.tool_calls.map((tc) => {
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(tc.function.arguments || "{}"); } catch { /* leave {} */ }
+        return { function: { name: tc.function.name, arguments: args } };
+      });
+    }
+    if (m.role === "tool" && m.name) out.tool_name = m.name;
+    return out;
+  });
+}
+
+/**
+ * Translate one native /api/chat stream object into the OpenAI ChatChunk shape
+ * the agent loop already consumes — so nothing downstream changes. Native sends
+ * each tool call complete in a single chunk (arguments as an object), which we
+ * stringify back to the OpenAI delta form.
+ */
+function nativeToChatChunk(native: any): ChatChunk | null {
+  const msg = native?.message;
+  if (!msg && !native?.done) return null;
+  const delta: ChatChunk["choices"][0]["delta"] = {};
+  if (msg?.content) delta.content = msg.content;
+  if (msg?.thinking) delta.reasoning_content = msg.thinking;
+  if (Array.isArray(msg?.tool_calls) && msg.tool_calls.length) {
+    delta.tool_calls = msg.tool_calls.map((tc: any, i: number) => ({
+      index: i,
+      id: `call_${i}`,
+      type: "function" as const,
+      function: {
+        name: tc.function?.name,
+        arguments: typeof tc.function?.arguments === "string"
+          ? tc.function.arguments
+          : JSON.stringify(tc.function?.arguments ?? {}),
+      },
+    }));
+  }
+  const finish_reason = native?.done
+    ? (delta.tool_calls ? "tool_calls" : (native.done_reason || "stop"))
+    : null;
+  const chunk: ChatChunk = { choices: [{ delta, finish_reason }] };
+  if (native?.done) {
+    chunk.usage = { prompt_tokens: native.prompt_eval_count || 0, completion_tokens: native.eval_count || 0 };
+  }
+  return chunk;
+}
+
 /** Non-streaming completion — used by the nightly self-update distiller. */
 export async function ollamaComplete(messages: ChatMessage[], model: string, signal?: AbortSignal): Promise<string> {
-  const res = await fetch(`${OLLAMA_URL}/v1/chat/completions`, {
+  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: false, temperature: 0.2, keep_alive: "30m" }),
+    body: JSON.stringify({
+      model,
+      messages: toNativeMessages(messages),
+      stream: false,
+      keep_alive: "30m",
+      options: { temperature: 0.2, num_ctx: NUM_CTX },
+    }),
     signal,
   });
   if (!res.ok) throw new Error(`Ollama error ${res.status}`);
   const data = await res.json();
-  return data.choices?.[0]?.message?.content || "";
+  return data.message?.content || "";
 }
 
 /**
- * Stream a chat completion directly from Ollama.
- * Yields OpenAI-compatible chunks (content + tool_call deltas).
+ * Stream a chat completion directly from Ollama's NATIVE /api/chat endpoint.
+ * Yields OpenAI-compatible ChatChunks (content + tool_call deltas) so the agent
+ * loop is unchanged, while letting us set num_ctx + keep_alive in options.
  */
 export async function* streamOllamaChat(
   messages: ChatMessage[],
@@ -152,13 +224,10 @@ export async function* streamOllamaChat(
 
   const body: Record<string, unknown> = {
     model,
-    messages,
+    messages: toNativeMessages(messages),
     stream: true,
-    temperature,
-    // Keep the model resident between turns — Ollama honors keep_alive on the
-    // OpenAI endpoint (num_ctx/options are NOT honored here, so context size is
-    // raised via the rodeo:tuned Modelfile instead).
     keep_alive: "30m",
+    options: { temperature, num_ctx: NUM_CTX },
   };
   // Only attach tools to models that can actually use them — avoids
   // confusing models that ignore the field and emit JSON in content.
@@ -166,7 +235,7 @@ export async function* streamOllamaChat(
     body.tools = tools;
   }
 
-  const res = await fetch(`${OLLAMA_URL}/v1/chat/completions`, {
+  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -184,6 +253,8 @@ export async function* streamOllamaChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
+  // Native /api/chat streams newline-delimited JSON (one full object per line),
+  // not SSE `data:` frames.
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -192,14 +263,12 @@ export async function* streamOllamaChat(
     buffer = lines.pop() || "";
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const payload = trimmed.slice(5).trim();
-      if (payload === "[DONE]") return;
-      try {
-        yield JSON.parse(payload) as ChatChunk;
-      } catch {
-        // partial/keepalive line — ignore
-      }
+      if (!trimmed) continue;
+      let native: any;
+      try { native = JSON.parse(trimmed); } catch { continue; }
+      const chunk = nativeToChatChunk(native);
+      if (chunk) yield chunk;
+      if (native.done) return;
     }
   }
 }
