@@ -7379,6 +7379,7 @@ async function runSubAgent(
             stream: false, // Non-streaming for sub-agents
             temperature: 0.2,
             max_tokens: 2048,
+            ...(CONFIG.local ? { keep_alive: "30m" } : {}),
           }),
           signal: AbortSignal.timeout(30000), // 30s timeout per iteration
         },
@@ -7416,7 +7417,15 @@ async function runSubAgent(
       }
 
       const content = assistantMessage.content || "";
-      const toolCalls = assistantMessage.tool_calls || [];
+      let toolCalls = assistantMessage.tool_calls || [];
+
+      // Recover tool calls the model emitted as TEXT instead of native
+      // tool_calls (coder models under Ollama) — same fallback as the main loop,
+      // otherwise sub-agents silently never act.
+      if (toolCalls.length === 0 && content) {
+        const parsed = parseToolCallsFromContent(content);
+        if (parsed.length > 0) toolCalls = parsed;
+      }
 
       // Clear the spinner line
       process.stdout.write("\r\x1b[K");
@@ -11453,7 +11462,7 @@ BODY:
             const prResponse = await fetch(chatUrl(), {
               method: "POST",
               headers: { "Content-Type": "application/json", ...(CONFIG.apiKey ? { Authorization: `Bearer ${CONFIG.apiKey}` } : {}) },
-              body: JSON.stringify({ model: CONFIG.model, messages: [{ role: "user", content: prPrompt }], stream: false }),
+              body: JSON.stringify({ model: CONFIG.model, messages: [{ role: "user", content: prPrompt }], stream: false, ...(CONFIG.local ? { keep_alive: "30m" } : {}) }),
             });
             stopSpinner();
 

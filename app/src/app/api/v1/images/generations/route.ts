@@ -70,6 +70,7 @@ async function generateWithStableDiffusion(
         model: sdModel.name,
         prompt,
         stream: false,
+        keep_alive: "30m", // keep the (large) SD model resident between requests
       }),
     });
 
