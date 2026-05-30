@@ -75,7 +75,7 @@ export function ModelSelector({ isOpen, onClose }: ModelSelectorProps) {
         <div className="p-2 max-h-80 overflow-auto">
           {models.length === 0 && <div className="text-sm text-terminal-muted text-center py-6">No models found.</div>}
           {models.map((m) => {
-            const tools = modelSupportsTools(m.name) && !/coder/i.test(m.name);
+            const tools = modelSupportsTools(m.name); // coder models now work via the text-parse fallback
             const fits = modelFits(m.size, ram);
             return (
               <div key={m.name} className={`group w-full flex items-center gap-2 px-3 py-2.5 rounded ${localModel === m.name ? "bg-terminal-accent/15" : "hover:bg-terminal-bg"} ${!fits ? "opacity-60" : ""}`}>

@@ -12,6 +12,51 @@ import { executeTool, isReadOnly, describeTool, computeEdit, makeDiff } from "./
 
 const MAX_ITERATIONS = 12;
 
+// ---------------------------------------------------------------------------
+// Tolerate models that emit tool calls as TEXT instead of native tool_calls
+// (qwen2.5-coder and friends do this under Ollama). Parse them out and run them.
+// ---------------------------------------------------------------------------
+function extractJsonObjects(text: string): any[] {
+  const objs: any[] = [];
+  let pos = 0;
+  while (pos < text.length) {
+    const start = text.indexOf("{", pos);
+    if (start === -1) break;
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (esc) { esc = false; continue; }
+      if (ch === "\\" && inStr) { esc = true; continue; }
+      if (ch === '"') inStr = !inStr;
+      else if (!inStr) {
+        if (ch === "{") depth++;
+        else if (ch === "}") { depth--; if (depth === 0) { end = i; break; } }
+      }
+    }
+    if (end === -1) break;
+    try { objs.push(JSON.parse(text.slice(start, end + 1))); } catch { /* not valid JSON */ }
+    pos = end + 1;
+  }
+  return objs;
+}
+
+function parseToolCallsFromText(content: string): ToolCall[] {
+  if (!content) return [];
+  const calls: ToolCall[] = [];
+  const add = (obj: any) => {
+    const name = obj?.name;
+    const args = obj?.arguments ?? obj?.parameters;
+    if (typeof name === "string" && args && typeof args === "object") {
+      calls.push({ id: `parsed_${calls.length}_${Math.random().toString(36).slice(2, 8)}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
+    }
+  };
+  const blockRe = /```(?:json|tool_code|tool)?\s*\n?([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = blockRe.exec(content))) for (const o of extractJsonObjects(m[1])) add(o);
+  if (calls.length === 0) for (const o of extractJsonObjects(content)) add(o);
+  return calls;
+}
+
 export interface ApprovalRequest {
   toolCall: ToolCall;
   description: string;
@@ -21,6 +66,8 @@ export interface ApprovalRequest {
 export interface AgentCallbacks {
   onContent?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
+  /** Replace the streamed assistant text (used after stripping text-emitted tool calls). */
+  onCleanContent?: (text: string) => void;
   /** Called when the assistant finishes a text turn (before tools run). */
   onAssistantTurn?: (content: string, toolCalls: ToolCall[]) => void;
   onToolStart?: (toolCall: ToolCall, description: string) => void;
@@ -115,7 +162,17 @@ export async function runAgent(
       });
     }
 
-    const toolCalls = Object.values(toolAcc).filter((t) => t.function.name);
+    let toolCalls = Object.values(toolAcc).filter((t) => t.function.name);
+
+    // Recover tool calls the model emitted as text (coder models, etc.).
+    if (toolCalls.length === 0 && content) {
+      const parsed = parseToolCallsFromText(content);
+      if (parsed.length) {
+        toolCalls = parsed;
+        content = content.replace(/```[\s\S]*?```/g, "").trim(); // drop the raw JSON from the bubble
+        cb.onCleanContent?.(content);
+      }
+    }
 
     // Record the assistant turn.
     const assistantMsg: ChatMessage = {

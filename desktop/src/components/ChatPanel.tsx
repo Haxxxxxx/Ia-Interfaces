@@ -196,6 +196,10 @@ export function ChatPanel() {
         if (!assistantOpen) { addMessage(id, { role: "assistant", content, reasoningContent: reasoning }); assistantOpen = true; }
         else updateLastMessage(id, { reasoningContent: reasoning });
       },
+      onCleanContent: (text) => {
+        content = text;
+        if (assistantOpen) updateLastMessage(id, { content: text });
+      },
       onAssistantTurn: (text, toolCalls) => {
         if (!assistantOpen && (toolCalls.length || text)) {
           addMessage(id, { role: "assistant", content: text, toolCalls });
