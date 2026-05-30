@@ -58,6 +58,8 @@ export interface Workspace {
   model: string;           // preferred local model for this project
   createdAt: number;
   lastOpenedAt: number;
+  memoryRefreshedAt?: number; // last nightly memory refresh
+  lastGitHead?: string;       // git HEAD at last refresh (skip if unchanged)
 }
 
 export interface AgentTask {
@@ -77,6 +79,7 @@ interface Instance {
   thinking: boolean;
   systemPrompt?: string;
   messages: Message[];
+  workspaceId?: string | null; // which project this chat belongs to (null = no workspace)
   createdAt: number;
   updatedAt: number;
 }
@@ -203,20 +206,20 @@ export const useStore = create<AppState>()(
 
       setActiveInstance: (id) => set({ activeInstanceId: id }),
 
-      createInstance: (name, model = "kimi-k2.5") => {
-        const newInstance: Instance = {
-          id: crypto.randomUUID(),
-          name,
-          model,
-          thinking: true,
-          messages: [],
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
-        set((state) => ({
-          instances: [...state.instances, newInstance],
-          activeInstanceId: newInstance.id,
-        }));
+      createInstance: (name, model) => {
+        set((state) => {
+          const newInstance: Instance = {
+            id: crypto.randomUUID(),
+            name,
+            model: model || state.localModel,
+            thinking: true,
+            messages: [],
+            workspaceId: state.activeWorkspaceId, // belongs to the active project
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          return { instances: [...state.instances, newInstance], activeInstanceId: newInstance.id };
+        });
       },
 
       deleteInstance: (id) =>
@@ -330,6 +333,7 @@ export const useStore = create<AppState>()(
         set((s) => ({
           workspaces: [...s.workspaces, { id, name, path, model: model || s.localModel, createdAt: now, lastOpenedAt: now }],
           activeWorkspaceId: id,
+          activeInstanceId: null, // fresh chat for the new project
           workingDirectory: path,
           ...(model ? { localModel: model } : {}),
         }));
@@ -340,16 +344,21 @@ export const useStore = create<AppState>()(
       removeWorkspace: (id) =>
         set((s) => ({
           workspaces: s.workspaces.filter((w) => w.id !== id),
+          instances: s.instances.filter((i) => (i.workspaceId ?? null) !== id), // drop its chats
           activeWorkspaceId: s.activeWorkspaceId === id ? null : s.activeWorkspaceId,
         })),
       switchWorkspace: (id) =>
         set((s) => {
           const w = s.workspaces.find((x) => x.id === id);
           if (!w) return {};
+          // Switch to this project's most recent chat (or none → an effect creates one).
+          const wsChats = s.instances.filter((i) => (i.workspaceId ?? null) === id);
+          const activeInstanceId = wsChats.length ? wsChats[wsChats.length - 1].id : null;
           return {
             activeWorkspaceId: id,
             workingDirectory: w.path,
             localModel: w.model || s.localModel,
+            activeInstanceId,
             workspaces: s.workspaces.map((x) => (x.id === id ? { ...x, lastOpenedAt: Date.now() } : x)),
           };
         }),

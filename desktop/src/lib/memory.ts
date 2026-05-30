@@ -7,9 +7,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { runAgent } from "./agent";
 import { buildSystemPrompt } from "./tools";
 import { gatherProjectContext } from "./project-context";
+import { useStore } from "./store";
 import type { ChatMessage } from "./ollama";
 
 export const MEMORY_REL = ".rodeo/memory.md";
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+interface ShellOut { stdout: string; stderr: string; exit_code: number }
+async function sh(command: string, cwd: string): Promise<string> {
+  try { const o = await invoke<ShellOut>("exec_shell", { command, cwd }); return (o.stdout || "").trim(); }
+  catch { return ""; }
+}
 
 function memPath(cwd: string): string {
   return `${cwd.replace(/\/$/, "")}/${MEMORY_REL}`;
@@ -79,4 +87,57 @@ Be accurate and concise (~120 lines max). When done, briefly confirm what you wr
     { onToolStart: (_tc, d) => onLog?.(d) }
   );
   return readProjectMemory(cwd);
+}
+
+/** Incrementally update existing memory from recent git changes (or full build if none). */
+export async function refreshProjectKnowledge(cwd: string, model: string, onLog?: (s: string) => void): Promise<string> {
+  const existing = await readProjectMemory(cwd);
+  if (!existing.trim()) return buildProjectKnowledge(cwd, model, onLog);
+
+  const changes = await sh("git log --oneline -15 2>/dev/null; echo '--- changed files ---'; git diff --stat HEAD~10..HEAD 2>/dev/null | tail -30", cwd);
+  const ctx = await gatherProjectContext(cwd);
+  const system = buildSystemPrompt(ctx, cwd, { autonomous: true });
+  const messages: ChatMessage[] = [
+    { role: "system", content: system },
+    {
+      role: "user",
+      content: `Update your project memory (.rodeo/memory.md) to reflect recent changes.
+
+CURRENT MEMORY:
+${existing.slice(0, 6000)}
+
+RECENT CHANGES (git):
+${changes || "(no git history available)"}
+
+Read any changed files you need to, then WRITE an updated .rodeo/memory.md (Write tool): keep what's still accurate, add what's new, fix what's wrong. Keep it concise (~120 lines). Confirm briefly when done.`,
+    },
+  ];
+  await runAgent(messages, { model, cwd, autoApprove: true, guarded: true, maxIterations: 20 }, { onToolStart: (_tc, d) => onLog?.(d) });
+  return readProjectMemory(cwd);
+}
+
+/**
+ * Nightly sweep: refresh each workspace's memory if it's due (>24h) and the
+ * project changed since the last refresh. Serialized; skips while busy.
+ */
+export async function refreshWorkspaceMemories(): Promise<void> {
+  const s = useStore.getState();
+  if (s.autonomousRunning || s.monitorBusy || !s.ollamaUp) return;
+
+  for (const w of s.workspaces) {
+    const st = useStore.getState();
+    if (st.autonomousRunning || st.monitorBusy) break;
+    const due = !w.memoryRefreshedAt || Date.now() - w.memoryRefreshedAt > DAY_MS;
+    if (!due) continue;
+    const head = await sh("git rev-parse HEAD 2>/dev/null", w.path);
+    // Skip if the repo hasn't moved since the last refresh.
+    if (head && w.lastGitHead === head && w.memoryRefreshedAt) {
+      useStore.getState().updateWorkspace(w.id, { memoryRefreshedAt: Date.now() });
+      continue;
+    }
+    try {
+      await refreshProjectKnowledge(w.path, w.model || st.localModel);
+      useStore.getState().updateWorkspace(w.id, { memoryRefreshedAt: Date.now(), lastGitHead: head });
+    } catch { /* skip this workspace */ }
+  }
 }

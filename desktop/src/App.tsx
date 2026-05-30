@@ -6,6 +6,7 @@ import { TasksView } from "./components/TasksView";
 import { MonitorsView } from "./components/MonitorsView";
 import { WorkspacesView } from "./components/WorkspacesView";
 import { shouldSelfUpdate, runSelfUpdate } from "./lib/learning";
+import { refreshWorkspaceMemories } from "./lib/memory";
 import { tickMonitors } from "./lib/monitors";
 import { StatusBar } from "./components/StatusBar";
 import { SettingsModal } from "./components/SettingsModal";
@@ -15,7 +16,7 @@ import { useStore } from "./lib/store";
 import { isOllamaUp, listLocalModels } from "./lib/ollama";
 
 function App() {
-  const { apiKey, apiUrl, mode, view, setConnected, setShowSettings, createInstance, setOllama } = useStore();
+  const { apiKey, apiUrl, mode, view, activeWorkspaceId, setConnected, setShowSettings, createInstance, setOllama } = useStore();
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
 
@@ -62,18 +63,24 @@ function App() {
     if (mode === "remote" && !apiKey) setShowSettings(true);
   }, [apiKey, mode, setShowSettings]);
 
-  // Ensure there's always at least one instance to chat in.
+  // Ensure the active workspace (or no-workspace) always has a chat, and that
+  // activeInstanceId points at one of its chats.
   useEffect(() => {
     const s = useStore.getState();
-    if (s.instances.length === 0) createInstance("Rodeo", s.localModel);
-  }, [createInstance]);
+    const ws = s.activeWorkspaceId ?? null;
+    const chats = s.instances.filter((i) => (i.workspaceId ?? null) === ws);
+    if (chats.length === 0) createInstance("Chat", s.localModel);
+    else if (!chats.some((i) => i.id === s.activeInstanceId)) useStore.setState({ activeInstanceId: chats[chats.length - 1].id });
+  }, [activeWorkspaceId, createInstance]);
 
   // Nightly self-update scheduler: catch-up shortly after launch, then hourly check.
   useEffect(() => {
     let cancelled = false;
     async function tick() {
-      if (cancelled || !shouldSelfUpdate()) return;
-      try { await runSelfUpdate(); } catch { /* logged in store */ }
+      if (cancelled) return;
+      if (shouldSelfUpdate()) { try { await runSelfUpdate(); } catch { /* logged in store */ } }
+      // Keep each project's memory current (gated per-workspace: 24h + git change).
+      try { await refreshWorkspaceMemories(); } catch { /* skip */ }
     }
     const t = setTimeout(tick, 15000);
     const iv = setInterval(tick, 60 * 60 * 1000);

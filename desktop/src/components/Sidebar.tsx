@@ -23,6 +23,8 @@ export function Sidebar() {
 
   const alertCount = monitors.filter((m) => m.lastStatus === "alert").length;
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
+  // Only show chats for the active project (null workspace = global chats).
+  const visibleInstances = instances.filter((i) => (i.workspaceId ?? null) === (activeWorkspaceId ?? null));
 
   function handleCreateInstance(e: React.FormEvent) {
     e.preventDefault();
@@ -110,7 +112,7 @@ export function Sidebar() {
         )}
 
         <div className="space-y-1 mt-2">
-          {instances.map((instance) => (
+          {visibleInstances.map((instance) => (
             <div
               key={instance.id}
               className={`group flex items-center justify-between px-3 py-2 rounded cursor-pointer transition-colors ${
@@ -133,9 +135,9 @@ export function Sidebar() {
             </div>
           ))}
 
-          {instances.length === 0 && !showNewInstance && (
+          {visibleInstances.length === 0 && !showNewInstance && (
             <div className="px-3 py-4 text-center text-sm text-terminal-muted">
-              <p>No instances yet</p>
+              <p>No chats yet</p>
               <button
                 onClick={() => setShowNewInstance(true)}
                 className="mt-2 text-terminal-accent hover:underline"
