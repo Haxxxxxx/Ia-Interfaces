@@ -9399,6 +9399,19 @@ function hasSpecialFormatting(text: string): boolean {
          /^#{1,3} /m.test(text);
 }
 
+// Count the actual TERMINAL rows a block of text occupies, accounting for line
+// wrapping at the given width. The raw streamed output wraps long lines, so a
+// plain "\n" count under-counts rows and leaves stale text when we re-render.
+function wrappedRowCount(text: string, width: number): number {
+  const w = width > 0 ? width : 80;
+  let rows = 0;
+  for (const line of text.split("\n")) {
+    const visible = line.replace(/\x1b\[[0-9;]*m/g, "").length;
+    rows += Math.max(1, Math.ceil(visible / w));
+  }
+  return rows;
+}
+
 // Stream response handler for faster output with rich formatting (Claude Code style)
 async function streamChat(response: Response): Promise<{ content: string; tool_calls: any[]; usage?: { prompt_tokens: number; completion_tokens: number } }> {
   const reader = response.body?.getReader();
@@ -9410,8 +9423,7 @@ async function streamChat(response: Response): Promise<{ content: string; tool_c
   let tool_calls: any[] = [];
   let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
   let isFirstChunk = true;
-  let rawOutput = ""; // Buffer for re-rendering
-  let rawLineCount = 0;
+  let rawOutput = ""; // Buffer for re-rendering (row count derived at the end)
   const displayedToolNames = new Set<number>(); // Track which tool names we've shown
 
   while (true) {
@@ -9439,11 +9451,6 @@ async function streamChat(response: Response): Promise<{ content: string; tool_c
           }
           content += delta.content;
           rawOutput += delta.content;
-
-          // Count newlines for later clearing
-          if (delta.content.includes("\n")) {
-            rawLineCount += (delta.content.match(/\n/g) || []).length;
-          }
 
           // Stream raw output (will re-render formatted at end if needed)
           process.stdout.write(delta.content);
@@ -9496,13 +9503,14 @@ async function streamChat(response: Response): Promise<{ content: string; tool_c
     process.stdout.write(`\r\x1b[2K`); // Clear the streaming dots
   }
 
-  // If content has special formatting, clear and re-render with formatting
+  // If content has special formatting, clear and re-render with formatting.
+  // Count WRAPPED rows (not just newlines) so long lines don't leave residue.
   if (content && hasSpecialFormatting(content)) {
-    // Move cursor up and clear the raw output, then print formatted
-    for (let i = 0; i <= rawLineCount; i++) {
-      process.stdout.write("\x1b[A\x1b[2K"); // Move up and clear line
+    const rows = wrappedRowCount(rawOutput, process.stdout.columns || 80);
+    process.stdout.write("\r\x1b[2K"); // clear the current (last) row
+    for (let i = 1; i < rows; i++) {
+      process.stdout.write("\x1b[A\r\x1b[2K"); // walk up clearing each row
     }
-    process.stdout.write(`\r\x1b[2K`); // Clear current line
     console.log(formatMarkdown(content));
   } else if (content) {
     console.log(); // Just add a newline
