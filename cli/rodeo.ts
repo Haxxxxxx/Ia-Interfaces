@@ -58,6 +58,7 @@ interface RodeoConfig {
   maxTokens?: number;     // Limit response length
   shadowUrl?: string;     // Shadow cloud GPU URL (optional)
   ollamaUrl?: string;     // Custom Ollama URL (default: localhost:11434)
+  local?: boolean;        // Talk directly to Ollama (offline) instead of the server
 }
 
 // GPU/Cloud configuration
@@ -946,6 +947,23 @@ async function fetchAvailableModels(): Promise<ModelInfo[]> {
     return cachedModels;
   }
 
+  // Offline mode: enumerate installed models straight from Ollama.
+  if (CONFIG.local) {
+    try {
+      const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
+      const res = await fetch(`${base}/api/tags`);
+      if (res.ok) {
+        const data = await res.json() as { models?: any[] };
+        cachedModels = (data.models || []).map((m: any) => ({
+          id: m.name, name: m.name, provider: "ollama", description: "", installed: true,
+        }));
+        modelsLastFetched = now;
+        return cachedModels!;
+      }
+    } catch {}
+    return FALLBACK_MODELS;
+  }
+
   try {
     const res = await fetch(`${CONFIG.apiUrl}/api/models`, {
       headers: CONFIG.apiKey ? { Authorization: `Bearer ${CONFIG.apiKey}` } : {},
@@ -1236,15 +1254,31 @@ function loadConfig(): RodeoConfig {
   }
 
   const apiUrl = process.env.RODEO_API_URL || fileConfig.apiUrl || "http://localhost:3000";
-  
+  const ollamaUrl = process.env.RODEO_OLLAMA_URL || fileConfig.ollamaUrl || "http://localhost:11434";
+
+  // Offline by default: talk straight to Ollama. Switch to server mode by
+  // setting RODEO_API_URL, RODEO_LOCAL=0, or "local": false in the config.
+  let local: boolean;
+  if (process.env.RODEO_LOCAL !== undefined) {
+    local = !["0", "false", "no"].includes(process.env.RODEO_LOCAL.toLowerCase());
+  } else if (process.env.RODEO_API_URL) {
+    local = false;
+  } else if (typeof fileConfig.local === "boolean") {
+    local = fileConfig.local;
+  } else {
+    local = true;
+  }
+
   // In dev mode (localhost), default to "dev" API key if not set
   const isDev = apiUrl.includes("localhost") || apiUrl.includes("127.0.0.1");
   const defaultApiKey = isDev ? "dev" : "";
-  
+
   return {
     apiUrl,
+    ollamaUrl,
+    local,
     apiKey: process.env.RODEO_API_KEY || fileConfig.apiKey || defaultApiKey,
-    model: process.env.RODEO_MODEL || fileConfig.model || "qwen2.5-coder:14b",
+    model: process.env.RODEO_MODEL || fileConfig.model || "qwen2.5:7b",
     timeout: parseInt(process.env.RODEO_TIMEOUT || "") || fileConfig.timeout || 120000,
     quickTimeout: parseInt(process.env.RODEO_QUICK_TIMEOUT || "") || fileConfig.quickTimeout || 30000,
     autoApprove: fileConfig.autoApprove || false,
@@ -1266,6 +1300,14 @@ function saveConfig(config: Partial<RodeoConfig>): void {
 
 // Current configuration
 const CONFIG = loadConfig();
+
+// Where to send chat completions. In local (offline) mode this is Ollama's
+// OpenAI-compatible endpoint directly; otherwise the Rodeo server proxy.
+// (Ollama ignores the Authorization header, so callers can keep sending it.)
+function chatUrl(): string {
+  const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
+  return CONFIG.local ? `${base}/v1/chat/completions` : `${CONFIG.apiUrl}/api/v1/chat/completions`;
+}
 
 // ============================================
 // PROJECT ROOT DETECTION - Stay within project boundaries
@@ -7142,7 +7184,7 @@ async function runSubAgent(
 
     try {
       const response = await fetchWithRetry(
-        `${CONFIG.apiUrl}/api/v1/chat/completions`,
+        chatUrl(),
         {
           method: "POST",
           headers: {
@@ -8196,6 +8238,20 @@ let cliInstanceId: string | null = null;
 
 // Register CLI instance with API (shows in dashboard)
 async function checkApiConnectivity(): Promise<boolean> {
+  // Offline mode: we only need the local Ollama daemon.
+  if (CONFIG.local) {
+    try {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 5000);
+      const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
+      const res = await fetch(`${base}/api/tags`, { signal: ac.signal });
+      clearTimeout(t);
+      if (res.ok) return true;
+    } catch {}
+    console.log(`\n${c.yellow}⚠ Ollama not reachable${c.reset} at ${CONFIG.ollamaUrl || "http://localhost:11434"}\n`);
+    console.log(`${c.dim}Start it: ${c.cyan}ollama serve${c.reset}\n`);
+    return false;
+  }
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 5000);
@@ -8221,7 +8277,7 @@ async function checkApiConnectivity(): Promise<boolean> {
 }
 
 async function registerCliInstance(): Promise<void> {
-  if (!CONFIG.apiKey || cliInstanceId) return;
+  if (CONFIG.local || !CONFIG.apiKey || cliInstanceId) return; // no server in offline mode
   try {
     const name = `CLI ${process.cwd().split("/").pop() || "session"}`;
     const res = await fetch(`${CONFIG.apiUrl}/api/instances`, {
@@ -9295,7 +9351,7 @@ async function chatWithImage(prompt: string, imageDataUrl: string): Promise<void
     ];
 
     const response = await fetchWithRetry(
-      `${CONFIG.apiUrl}/api/v1/chat/completions`,
+      chatUrl(),
       {
         method: "POST",
         headers: {
@@ -9406,7 +9462,7 @@ async function chat(userInput: string): Promise<void> {
 
     try {
       const response = await fetchWithRetry(
-        `${CONFIG.apiUrl}/api/v1/chat/completions`,
+        chatUrl(),
         {
           method: "POST",
           headers: {
@@ -11026,7 +11082,7 @@ BODY:
 ## Test Plan
 <how to test>`;
 
-            const prResponse = await fetch(`${CONFIG.apiUrl}/api/v1/chat/completions`, {
+            const prResponse = await fetch(chatUrl(), {
               method: "POST",
               headers: { "Content-Type": "application/json", ...(CONFIG.apiKey ? { Authorization: `Bearer ${CONFIG.apiKey}` } : {}) },
               body: JSON.stringify({ model: CONFIG.model, messages: [{ role: "user", content: prPrompt }], stream: false }),
