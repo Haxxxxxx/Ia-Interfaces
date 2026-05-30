@@ -348,6 +348,23 @@ Note: This tool cannot access authenticated pages (Google Docs, private repos, e
   {
     type: "function",
     function: {
+      name: "AskUser",
+      description: "Ask the user a clarifying question WITH a few concrete options when you need a decision only they can make (which approach, naming, scope, etc.). Prefer this over an open-ended question. Do NOT use for things you can find with Read/Glob/Grep.",
+      parameters: {
+        type: "object",
+        required: ["question", "options"],
+        properties: {
+          question: { type: "string", description: "The question to ask" },
+          options: { type: "array", items: { type: "string" }, description: "2-4 concrete answer choices" },
+          header: { type: "string", description: "Short label (optional)" },
+          allowMultiple: { type: "boolean", description: "Allow selecting more than one" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "AskUserQuestion",
       description: "Ask the user a clarifying question when you cannot proceed without more information. NEVER use for 'which file?' or 'what file to edit?'—use Glob and Grep to find files yourself. Use sparingly - prefer tools first.",
       parameters: {
@@ -1578,13 +1595,13 @@ const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     name: "build",
     mode: "primary",
     description: "Default agent for writing and editing code",
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "AskUserQuestion", "NotebookEdit", "EnterPlanMode", "TaskOutput", "TodoCreate", "TodoUpdate", "TodoList", "TodoGet"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "AskUser", "AskUserQuestion", "NotebookEdit", "EnterPlanMode", "TaskOutput", "TodoCreate", "TodoUpdate", "TodoList", "TodoGet"],
   },
   plan: {
     name: "plan",
     mode: "primary",
     description: "Research and planning agent - read-only",
-    allowedTools: ["Read", "Glob", "Grep", "List", "WebSearch", "WebFetch", "AskUserQuestion", "Task", "ExitPlanMode"],
+    allowedTools: ["Read", "Glob", "Grep", "List", "WebSearch", "WebFetch", "AskUser", "AskUserQuestion", "Task", "ExitPlanMode"],
   },
   explore: {
     name: "explore",
@@ -1596,7 +1613,7 @@ const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     name: "general",
     mode: "subagent",
     description: "General purpose subagent with full capabilities",
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "AskUserQuestion", "NotebookEdit"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "AskUser", "AskUserQuestion", "NotebookEdit"],
   },
 };
 
@@ -6947,9 +6964,10 @@ function normalizeToolName(name: string): string {
     task: "task",
     spawn_agent: "task",
     subagent: "task",
+    AskUser: "ask_user",
+    ask_user: "ask_user",
     AskUserQuestion: "ask_user_question",
     ask_user_question: "ask_user_question",
-    AskUser: "ask_user_question",
     ask_question: "ask_user_question",
     NotebookEdit: "notebook_edit",
     notebook_edit: "notebook_edit",
@@ -7016,6 +7034,7 @@ function getToolDisplayName(name: string): string {
     web_search: "WebSearch",
     web_fetch: "WebFetch",
     task: "Task",
+    ask_user: "AskUser",
     ask_user_question: "AskUserQuestion",
     notebook_edit: "NotebookEdit",
     tree: "Tree",
@@ -7867,6 +7886,49 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
 
       // Execute sub-agent with full agent loop
       result = await runSubAgent(subagentType, description, prompt, runInBackground);
+      break;
+    }
+
+    case "ask_user": {
+      // Structured choice question (matches the desktop AskUser tool).
+      const question: string = args.question || "?";
+      const options: string[] = Array.isArray(args.options) ? args.options.map((o: any) => String(o)) : [];
+      const allowMultiple = !!args.allowMultiple;
+
+      stopSpinner();
+      waitingForUserInput = true;
+      process.stdout.clearLine?.(0);
+      process.stdout.cursorTo?.(0);
+      process.stdout.write("\n");
+
+      const rl = globalRl;
+      if (!rl) { waitingForUserInput = false; result = `${c.red}Error:${c.reset} Readline not available.`; break; }
+      const originalPrompt = rl.getPrompt();
+      rl.setPrompt("");
+      try {
+        if (args.header) console.log(`${c.dim}${c.bold}${String(args.header).toUpperCase()}${c.reset}`);
+        console.log(`\n${c.purple}?${c.reset} ${c.bold}${question}${c.reset}`);
+        options.forEach((opt, i) => console.log(`  ${c.cyan}${i + 1})${c.reset} ${opt}`));
+        const promptText = options.length
+          ? `\n${c.cyan}${allowMultiple ? "Select option(s) (e.g. 1,3)" : `Select an option (1-${options.length})`} or type your own:${c.reset} `
+          : `\n${c.cyan}Your answer:${c.reset} `;
+        const answer = await new Promise<string>((resolve) => rl.question(promptText, (a) => resolve(a.trim())));
+
+        let final = answer;
+        if (options.length) {
+          if (allowMultiple && /^[\d,\s]+$/.test(answer)) {
+            final = answer.split(",").map((s) => options[parseInt(s.trim()) - 1]).filter(Boolean).join("; ") || answer;
+          } else {
+            const idx = parseInt(answer) - 1;
+            if (!isNaN(idx) && idx >= 0 && idx < options.length) final = options[idx];
+          }
+        }
+        console.log(`${c.green}✓${c.reset} ${c.dim}${final}${c.reset}`);
+        result = `User answered: "${final}"`;
+      } finally {
+        rl.setPrompt(originalPrompt);
+        waitingForUserInput = false;
+      }
       break;
     }
 
@@ -9825,26 +9887,25 @@ ${c.purple}${c.bold}Rodeo Configuration${c.reset}
 // Main
 // ASCII banner for Rodeo - Enhanced styling
 function printBanner(): void {
-  const width = Math.min(getTerminalWidth(), 70);
-  const line = "─".repeat(width - 2);
-
-  // Gradient effect using different orange shades
-  const o1 = "\x1b[38;5;202m"; // Deep orange
-  const o2 = "\x1b[38;5;208m"; // Orange
-  const o3 = "\x1b[38;5;214m"; // Light orange
-  const o4 = "\x1b[38;5;220m"; // Yellow-orange
-
+  // Per-letter orange gradient (R O D E O), borderless for a cleaner look.
+  const o1 = "\x1b[38;5;202m"; // R — deep orange
+  const o2 = "\x1b[38;5;208m"; // O
+  const o3 = "\x1b[38;5;214m"; // D
+  const o4 = "\x1b[38;5;215m"; // E
+  const o5 = "\x1b[38;5;220m"; // O — yellow-orange
+  const b = c.bold, r = c.reset;
+  const R = (s: string) => `${b}${o1}${s}${r}`, O = (s: string) => `${b}${o2}${s}${r}`,
+        D = (s: string) => `${b}${o3}${s}${r}`, E = (s: string) => `${b}${o4}${s}${r}`,
+        O2 = (s: string) => `${b}${o5}${s}${r}`;
   const banner = `
-${o1}╭${line}╮${c.reset}
-${o1}│${c.reset}                                                                  ${o1}│${c.reset}
-${o1}│${c.reset}   ${c.bold}${o1}██████${c.reset}  ${c.bold}${o2}██████${c.reset}  ${c.bold}${o2}██████${c.reset}  ${c.bold}${o3}███████${c.reset} ${c.bold}${o4}██████${c.reset}                   ${o1}│${c.reset}
-${o1}│${c.reset}   ${c.bold}${o1}██${c.reset}   ${c.bold}${o1}██${c.reset} ${c.bold}${o2}██${c.reset}  ${c.bold}${o2}██${c.reset} ${c.bold}${o2}██${c.reset}   ${c.bold}${o2}██${c.reset} ${c.bold}${o3}██${c.reset}      ${c.bold}${o4}██${c.reset}  ${c.bold}${o4}██${c.reset}                  ${o1}│${c.reset}
-${o1}│${c.reset}   ${c.bold}${o1}██████${c.reset}  ${c.bold}${o2}██${c.reset}  ${c.bold}${o2}██${c.reset} ${c.bold}${o2}██${c.reset}   ${c.bold}${o2}██${c.reset} ${c.bold}${o3}█████${c.reset}   ${c.bold}${o4}██${c.reset}  ${c.bold}${o4}██${c.reset}                  ${o1}│${c.reset}
-${o1}│${c.reset}   ${c.bold}${o1}██${c.reset}   ${c.bold}${o1}██${c.reset} ${c.bold}${o2}██${c.reset}  ${c.bold}${o2}██${c.reset} ${c.bold}${o2}██${c.reset}   ${c.bold}${o2}██${c.reset} ${c.bold}${o3}██${c.reset}      ${c.bold}${o4}██${c.reset}  ${c.bold}${o4}██${c.reset}                  ${o1}│${c.reset}
-${o1}│${c.reset}   ${c.bold}${o1}██${c.reset}   ${c.bold}${o1}██${c.reset} ${c.bold}${o2}██████${c.reset}  ${c.bold}${o2}██████${c.reset}  ${c.bold}${o3}███████${c.reset} ${c.bold}${o4}██████${c.reset}                   ${o1}│${c.reset}
-${o1}│${c.reset}                                                                  ${o1}│${c.reset}
-${o1}│${c.reset}   ${c.dim}AI Coding Assistant${c.reset}                              ${c.dim}v1.0.0${c.reset}   ${o1}│${c.reset}
-${o1}╰${line}╯${c.reset}`;
+  ${R("██████╗")}  ${O("██████╗")} ${D("██████╗")} ${E("███████╗")} ${O2("██████╗")}
+  ${R("██╔══██╗")}${O("██╔═══██╗")}${D("██╔══██╗")}${E("██╔════╝")}${O2("██╔═══██╗")}
+  ${R("██████╔╝")}${O("██║   ██║")}${D("██║  ██║")}${E("█████╗  ")}${O2("██║   ██║")}
+  ${R("██╔══██╗")}${O("██║   ██║")}${D("██║  ██║")}${E("██╔══╝  ")}${O2("██║   ██║")}
+  ${R("██║  ██║")}${O("╚██████╔╝")}${D("██████╔╝")}${E("███████╗")}${O2("╚██████╔╝")}
+  ${R("╚═╝  ╚═╝")} ${O("╚═════╝")} ${D("╚═════╝")} ${E("╚══════╝")} ${O2("╚═════╝")}
+  ${c.dim}offline AI coding agent${r}   ${o3}·${r}   ${c.dim}v1.0.0${r}
+`;
   console.log(banner);
 }
 
