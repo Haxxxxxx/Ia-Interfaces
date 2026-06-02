@@ -2,9 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Serialize)]
 pub struct ShellOutput {
@@ -84,6 +87,159 @@ fn search_files(pattern: String, cwd: String) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
+// ---------------------------------------------------------------------------
+// MCP (Model Context Protocol) stdio transport
+//
+// Each MCP server is a long-lived child process we talk to over stdin/stdout
+// using newline-delimited JSON-RPC. We keep a registry of running servers; a
+// per-server Mutex serializes requests to that server while letting different
+// servers run concurrently. Requests block until the response with the matching
+// JSON-RPC id arrives (notifications and other ids are skipped).
+// ---------------------------------------------------------------------------
+struct McpProc {
+    child: Child,
+    stdin: ChildStdin,
+    reader: BufReader<ChildStdout>,
+}
+
+fn mcp_registry() -> &'static Mutex<HashMap<String, Arc<Mutex<McpProc>>>> {
+    static REG: OnceLock<Mutex<HashMap<String, Arc<Mutex<McpProc>>>>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Spawn an MCP server child process (idempotent per id).
+#[tauri::command]
+fn mcp_spawn(
+    id: String,
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    cwd: Option<String>,
+) -> Result<(), String> {
+    {
+        let reg = mcp_registry().lock().map_err(|_| "registry lock poisoned")?;
+        if reg.contains_key(&id) {
+            return Ok(());
+        }
+    }
+    let mut cmd = Command::new(&command);
+    cmd.args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // GUI-launched apps inherit a stripped PATH; make common bin dirs reachable
+    // so `npx`, `uvx`, etc. resolve.
+    let path = std::env::var("PATH").unwrap_or_default();
+    cmd.env("PATH", format!("{}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", path));
+    for (k, v) in &env {
+        cmd.env(k, v);
+    }
+    if let Some(d) = cwd {
+        if !d.is_empty() {
+            cmd.current_dir(d);
+        }
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Could not start MCP server '{}' ({}): {}", id, command, e))?;
+    let stdin = child.stdin.take().ok_or("failed to open MCP server stdin")?;
+    let stdout = child.stdout.take().ok_or("failed to open MCP server stdout")?;
+    let proc = McpProc {
+        child,
+        stdin,
+        reader: BufReader::new(stdout),
+    };
+    mcp_registry()
+        .lock()
+        .map_err(|_| "registry lock poisoned")?
+        .insert(id, Arc::new(Mutex::new(proc)));
+    Ok(())
+}
+
+/// Send a JSON-RPC request and block until the response with `request_id` arrives.
+#[tauri::command]
+fn mcp_request(id: String, request: String, request_id: i64) -> Result<String, String> {
+    let arc = {
+        let reg = mcp_registry().lock().map_err(|_| "registry lock poisoned")?;
+        reg.get(&id)
+            .cloned()
+            .ok_or_else(|| format!("MCP server '{}' is not running", id))?
+    };
+    let mut p = arc.lock().map_err(|_| "MCP server lock poisoned")?;
+    p.stdin
+        .write_all(request.as_bytes())
+        .and_then(|_| p.stdin.write_all(b"\n"))
+        .and_then(|_| p.stdin.flush())
+        .map_err(|e| format!("MCP write failed: {}", e))?;
+
+    // Read newline-delimited JSON objects until we get the matching response.
+    // The cap bounds runaway chatter; a well-behaved server replies quickly.
+    for _ in 0..100_000 {
+        let mut line = String::new();
+        let n = p
+            .reader
+            .read_line(&mut line)
+            .map_err(|e| format!("MCP read failed: {}", e))?;
+        if n == 0 {
+            return Err("MCP server closed the connection".to_string());
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if v.get("id").and_then(|x| x.as_i64()) == Some(request_id) {
+                return Ok(trimmed.to_string());
+            }
+            // else: a notification or a different id — keep reading.
+        }
+    }
+    Err("no matching MCP response received".to_string())
+}
+
+/// Send a JSON-RPC notification (no response expected).
+#[tauri::command]
+fn mcp_notify(id: String, request: String) -> Result<(), String> {
+    let arc = {
+        let reg = mcp_registry().lock().map_err(|_| "registry lock poisoned")?;
+        reg.get(&id)
+            .cloned()
+            .ok_or_else(|| format!("MCP server '{}' is not running", id))?
+    };
+    let mut p = arc.lock().map_err(|_| "MCP server lock poisoned")?;
+    p.stdin
+        .write_all(request.as_bytes())
+        .and_then(|_| p.stdin.write_all(b"\n"))
+        .and_then(|_| p.stdin.flush())
+        .map_err(|e| format!("MCP write failed: {}", e))
+}
+
+/// Kill an MCP server and drop it from the registry.
+#[tauri::command]
+fn mcp_stop(id: String) -> Result<(), String> {
+    if let Some(arc) = mcp_registry()
+        .lock()
+        .map_err(|_| "registry lock poisoned")?
+        .remove(&id)
+    {
+        if let Ok(mut p) = arc.lock() {
+            let _ = p.child.kill();
+        }
+    }
+    Ok(())
+}
+
+/// Kill every running MCP server (used on app exit).
+fn kill_all_mcp() {
+    if let Ok(mut reg) = mcp_registry().lock() {
+        for (_, arc) in reg.drain() {
+            if let Ok(mut p) = arc.lock() {
+                let _ = p.child.kill();
+            }
+        }
+    }
+}
+
 /// Launch the local Ollama daemon (`ollama serve`) detached, for offline use.
 #[tauri::command]
 fn start_ollama() -> Result<String, String> {
@@ -117,6 +273,7 @@ fn main() {
             // Close button → CloseRequested; Cmd+Q tears the window down → Destroyed.
             match event {
                 tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                    kill_all_mcp();
                     unload_ollama_models();
                 }
                 _ => {}
@@ -129,6 +286,10 @@ fn main() {
             list_directory,
             search_files,
             start_ollama,
+            mcp_spawn,
+            mcp_request,
+            mcp_notify,
+            mcp_stop,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -136,6 +297,7 @@ fn main() {
             // Catch every exit path (incl. Cmd+Q, which skips ExitRequested).
             match event {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    kill_all_mcp();
                     unload_ollama_models();
                 }
                 _ => {}

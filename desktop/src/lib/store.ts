@@ -62,6 +62,16 @@ export interface Workspace {
   lastGitHead?: string;       // git HEAD at last refresh (skip if unchanged)
 }
 
+export interface McpServer {
+  id: string;                       // short slug, used in the mcp__<id>__<tool> name
+  name: string;                     // display name
+  command: string;                  // executable, e.g. "npx"
+  args: string[];                   // e.g. ["-y", "@modelcontextprotocol/server-filesystem", "/path"]
+  env?: Record<string, string>;
+  cwd?: string;
+  enabled: boolean;
+}
+
 export interface AgentTask {
   id: string;
   title: string;
@@ -170,6 +180,13 @@ interface AppState {
   recordMonitorRun: (id: string, run: MonitorRun) => void;
   monitorBusy: boolean;
   setMonitorBusy: (v: boolean) => void;
+
+  // MCP servers (external tool providers)
+  mcpServers: McpServer[];
+  addMcpServer: (m: Omit<McpServer, "id" | "enabled"> & { id?: string; enabled?: boolean }) => string;
+  updateMcpServer: (id: string, patch: Partial<McpServer>) => void;
+  removeMcpServer: (id: string) => void;
+  toggleMcpServer: (id: string, enabled: boolean) => void;
 }
 
 export const useStore = create<AppState>()(
@@ -387,6 +404,36 @@ export const useStore = create<AppState>()(
         })),
       monitorBusy: false,
       setMonitorBusy: (monitorBusy) => set({ monitorBusy }),
+
+      // MCP servers
+      mcpServers: [],
+      addMcpServer: (m) => {
+        const id = (m.id || m.name || "server")
+          .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || crypto.randomUUID().slice(0, 8);
+        set((s) => {
+          // Ensure the slug is unique.
+          let unique = id, n = 2;
+          while (s.mcpServers.some((x) => x.id === unique)) unique = `${id}-${n++}`;
+          return {
+            mcpServers: [...s.mcpServers, {
+              id: unique,
+              name: m.name || unique,
+              command: m.command,
+              args: m.args || [],
+              env: m.env || {},
+              cwd: m.cwd || "",
+              enabled: m.enabled ?? true,
+            }],
+          };
+        });
+        return id;
+      },
+      updateMcpServer: (id, patch) =>
+        set((s) => ({ mcpServers: s.mcpServers.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
+      removeMcpServer: (id) =>
+        set((s) => ({ mcpServers: s.mcpServers.filter((m) => m.id !== id) })),
+      toggleMcpServer: (id, enabled) =>
+        set((s) => ({ mcpServers: s.mcpServers.map((m) => (m.id === id ? { ...m, enabled } : m)) })),
     }),
     {
       name: "rodeo-storage",
@@ -426,6 +473,7 @@ export const useStore = create<AppState>()(
         monitors: state.monitors,
         workspaces: state.workspaces,
         activeWorkspaceId: state.activeWorkspaceId,
+        mcpServers: state.mcpServers,
       }),
     }
   )

@@ -9,8 +9,14 @@
 import { streamOllamaChat, NUM_CTX, type ChatMessage, type ToolCall } from "./ollama";
 import { TOOL_SCHEMAS } from "./tools";
 import { executeTool, isReadOnly, describeTool, computeEdit, makeDiff } from "./tool-executor";
+import { getMcpToolSchemas } from "./mcp";
 
 const MAX_ITERATIONS = 12;
+
+// A read/explore-only toolset for sub-agents: they can investigate but never
+// mutate the filesystem or spawn further sub-agents (no recursion blow-up).
+const EXPLORE_ONLY = new Set(["Read", "Glob", "Grep", "List", "SemanticSearch", "WebSearch", "WebFetch"]);
+const MAX_SUBAGENT_DEPTH = 1;
 
 // ---------------------------------------------------------------------------
 // Tolerate models that emit tool calls as TEXT instead of native tool_calls
@@ -40,8 +46,6 @@ function extractJsonObjects(text: string): any[] {
   return objs;
 }
 
-// Known tool names (lowercased) — reject prose JSON that merely looks tool-shaped.
-const KNOWN_TOOL_NAMES = new Set(TOOL_SCHEMAS.map((t) => t.function.name.toLowerCase()));
 
 /**
  * Keep the history within num_ctx so a deep task doesn't overflow the window and
@@ -87,14 +91,14 @@ function looksLikeUserQuestion(text: string): boolean {
   return /\b(which (file|one|option|approach|of these)|do you want|would you like|should i\b|shall i\b|let me know|please (confirm|clarify|specify)|can you clarify|to confirm[:,])/i.test(t);
 }
 
-function parseToolCallsFromText(content: string): ToolCall[] {
+function parseToolCallsFromText(content: string, knownNames: Set<string>): ToolCall[] {
   if (!content) return [];
   const calls: ToolCall[] = [];
   const add = (obj: any) => {
     // Tolerate the key shapes weak models emit for the name and the args.
     const name = obj?.name ?? obj?.tool ?? obj?.function ?? obj?.action;
     const args = obj?.arguments ?? obj?.parameters ?? obj?.args ?? obj?.input ?? obj?.tool_input;
-    if (typeof name === "string" && KNOWN_TOOL_NAMES.has(name.toLowerCase()) && args && typeof args === "object") {
+    if (typeof name === "string" && knownNames.has(name.toLowerCase()) && args && typeof args === "object") {
       calls.push({ id: `parsed_${calls.length}_${Math.random().toString(36).slice(2, 8)}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
     }
   };
@@ -137,6 +141,8 @@ export interface AgentOptions {
   guarded?: boolean;       // enforce destructive-command + working-dir guardrails
   maxIterations?: number;  // override the default step cap (autonomous runs go higher)
   signal?: AbortSignal;
+  subagentDepth?: number;  // 0 = top-level; sub-agents run at depth 1 (no MCP, no further Task)
+  toolNames?: Set<string>; // restrict the core toolset (sub-agents are explore-only)
 }
 
 export async function runAgent(
@@ -148,6 +154,19 @@ export async function runAgent(
   let nudges = 0;        // times we've forced "stop narrating, use a tool"
   let toolsUsed = false; // whether any tool ran this task
   const maxIter = opts.maxIterations ?? MAX_ITERATIONS;
+  const depth = opts.subagentDepth ?? 0;
+
+  // Build this run's tool set: core schemas (optionally restricted for sub-agents)
+  // plus MCP server tools (top-level only — sub-agents stay lean and explore-only).
+  const coreTools = opts.toolNames
+    ? TOOL_SCHEMAS.filter((t) => opts.toolNames!.has(t.function.name))
+    : TOOL_SCHEMAS;
+  let mcpTools: any[] = [];
+  if (depth === 0) {
+    try { mcpTools = await getMcpToolSchemas(); } catch { mcpTools = []; }
+  }
+  const activeTools = [...coreTools, ...mcpTools];
+  const knownNames = new Set(activeTools.map((t) => t.function.name.toLowerCase()));
 
   // Did the latest user turn ask Rodeo to actually DO something (vs. explain)?
   const lastUser = [...messages].reverse().find((m) => m.role === "user" && typeof m.content === "string")?.content as string || "";
@@ -174,7 +193,7 @@ export async function runAgent(
 
     for await (const chunk of streamOllamaChat(messages, {
       model: opts.model,
-      tools: TOOL_SCHEMAS,
+      tools: activeTools,
       signal: opts.signal,
     })) {
       const choice = chunk.choices?.[0];
@@ -220,7 +239,7 @@ export async function runAgent(
 
     // Recover tool calls the model emitted as text (coder models, etc.).
     if (toolCalls.length === 0 && content) {
-      const parsed = parseToolCallsFromText(content);
+      const parsed = parseToolCallsFromText(content, knownNames);
       if (parsed.length) {
         toolCalls = parsed;
         content = content.replace(/```[\s\S]*?```/g, "").trim(); // drop the raw JSON from the bubble
@@ -279,11 +298,33 @@ export async function runAgent(
     lastSignature = signature;
     toolsUsed = true;
 
+    // Sub-agent fan-out: when the batch contains Task calls, run them
+    // CONCURRENTLY (each is an explore-only child agent) and pair results back
+    // in the original order. Read-only tools sharing the batch run too;
+    // mutations are refused here (don't mix edits with a Task fan-out).
+    if (toolCalls.some((t) => t.function.name === "Task")) {
+      const settled = await Promise.all(
+        toolCalls.map(async (tc) => {
+          if (tc.function.name === "Task") return runSubTask(tc, opts, cb);
+          cb.onToolStart?.(tc, describeTool(tc));
+          if (tc.function.name === "AskUser") return "AskUser is not available alongside a Task fan-out.";
+          if (isReadOnly(tc.function.name)) return executeTool(tc, opts.cwd, opts.guarded);
+          return "Skipped: don't mix mutating tools with a Task fan-out — make edits in their own turn.";
+        })
+      );
+      settled.forEach((result, i) => {
+        cb.onToolResult?.(toolCalls[i], result);
+        messages.push({ role: "tool", tool_call_id: toolCalls[i].id, name: toolCalls[i].function.name, content: result });
+      });
+      if (opts.signal?.aborted) return messages;
+      continue;
+    }
+
     // Fast path: a batch of only read-only tools (Read/Glob/Grep/List, no
     // AskUser, no mutations) — run them CONCURRENTLY instead of one Tauri
     // round-trip at a time. Results are still pushed in the original order
     // (native /api/chat matches tool results to calls by order).
-    if (toolCalls.length > 1 && toolCalls.every((t) => t.function.name !== "AskUser" && isReadOnly(t.function.name))) {
+    if (toolCalls.length > 1 && toolCalls.every((t) => t.function.name !== "AskUser" && t.function.name !== "Task" && isReadOnly(t.function.name))) {
       const settled = await Promise.all(
         toolCalls.map(async (tc) => {
           cb.onToolStart?.(tc, describeTool(tc));
@@ -363,6 +404,44 @@ export async function runAgent(
     content: `(Reached the ${maxIter}-step limit. Pausing here.)`,
   });
   return messages;
+}
+
+/**
+ * Run a sub-agent for a Task call: a fresh, explore-only agent loop with its own
+ * (short) message history. It can Read/Glob/Grep/SemanticSearch/Web* but cannot
+ * mutate files or spawn further sub-agents. Returns its final answer as text.
+ */
+async function runSubTask(tc: ToolCall, opts: AgentOptions, cb: AgentCallbacks): Promise<string> {
+  let a: any = {};
+  try { a = JSON.parse(tc.function.arguments || "{}"); } catch {}
+  const label = a.description || (a.prompt ? String(a.prompt).slice(0, 50) : "task");
+  cb.onToolStart?.(tc, `Sub-agent: ${label}`);
+
+  if ((opts.subagentDepth ?? 0) >= MAX_SUBAGENT_DEPTH) {
+    return "Error: sub-agents cannot spawn further sub-agents. Do this investigation directly.";
+  }
+  const prompt = String(a.prompt || a.description || "").trim();
+  if (!prompt) return "Error: Task requires a 'prompt' describing what to investigate.";
+
+  const subMessages: ChatMessage[] = [{ role: "user", content: prompt }];
+  try {
+    await runAgent(subMessages, {
+      model: opts.model,
+      cwd: opts.cwd,
+      autoApprove: true,   // explore-only toolset — nothing mutating to approve
+      guarded: true,
+      maxIterations: 8,
+      signal: opts.signal,
+      subagentDepth: (opts.subagentDepth ?? 0) + 1,
+      toolNames: EXPLORE_ONLY,
+    });
+  } catch (e) {
+    return `Sub-agent failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  const finalText = [...subMessages]
+    .reverse()
+    .find((m) => m.role === "assistant" && typeof m.content === "string" && (m.content as string).trim())?.content as string | undefined;
+  return finalText?.trim() || "(sub-agent finished without a textual answer)";
 }
 
 /** Build a diff preview for edit/write tools so the user sees the change before approving. */

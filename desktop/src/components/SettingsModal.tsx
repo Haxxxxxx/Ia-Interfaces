@@ -1,4 +1,5 @@
 import { useStore } from "../lib/store";
+import { McpServersSection } from "./McpServersSection";
 
 export function SettingsModal() {
   const {
@@ -20,7 +21,7 @@ export function SettingsModal() {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowSettings(false)}>
-      <div className="bg-terminal-surface border border-terminal-border rounded-lg w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-terminal-surface border border-terminal-border rounded-lg w-full max-w-lg p-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-lg font-semibold">Settings</h2>
           <button onClick={() => setShowSettings(false)} className="text-terminal-muted hover:text-terminal-text">×</button>
@@ -104,6 +105,11 @@ export function SettingsModal() {
               </div>
             </>
           )}
+
+          {/* MCP servers */}
+          <div className="pt-2 border-t border-terminal-border">
+            <McpServersSection />
+          </div>
         </div>
 
         <div className="mt-6 flex justify-end gap-3">

@@ -379,7 +379,29 @@ export async function executeTool(toolCall: ToolCall, cwd: string, guarded = fal
         return `Remembered in .rodeo/memory.md: ${args.note}`;
       }
 
+      case "WebSearch": {
+        const { webSearch } = await import("./web");
+        return webSearch(String(args.query || ""), Number(args.num) || 6);
+      }
+      case "WebFetch": {
+        const { webFetch } = await import("./web");
+        return webFetch(String(args.url || ""), args.prompt ? String(args.prompt) : undefined);
+      }
+      case "IndexProject": {
+        const { buildIndex } = await import("./semantic");
+        return buildIndex(cwd);
+      }
+      case "SemanticSearch": {
+        const { semanticSearch } = await import("./semantic");
+        return semanticSearch(cwd, String(args.query || ""), Number(args.k) || 6);
+      }
+
       default:
+        // MCP tools are namespaced "mcp__<server>__<tool>" and routed dynamically.
+        if (name.startsWith("mcp__")) {
+          const { callMcpTool } = await import("./mcp");
+          return callMcpTool(name, args);
+        }
         return `Error: unknown tool "${name}"`;
     }
   } catch (e) {
@@ -404,6 +426,16 @@ export function describeTool(toolCall: ToolCall): string {
     case "Glob": return `Glob ${a.pattern}`;
     case "Grep": return `Grep "${a.pattern}"`;
     case "List": return `List ${a.path}`;
-    default: return toolCall.function.name;
+    case "WebSearch": return `Web search: ${a.query}`;
+    case "WebFetch": return `Fetch ${a.url}`;
+    case "IndexProject": return `Build semantic index`;
+    case "SemanticSearch": return `Semantic search: ${a.query}`;
+    case "Task": return `Sub-agent: ${a.description || a.prompt?.slice(0, 40) || "task"}`;
+    default:
+      if (toolCall.function.name.startsWith("mcp__")) {
+        const [, server, tool] = toolCall.function.name.split("__");
+        return `MCP ${server}/${tool}`;
+      }
+      return toolCall.function.name;
   }
 }

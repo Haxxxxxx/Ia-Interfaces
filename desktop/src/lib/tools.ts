@@ -213,10 +213,87 @@ export const TOOL_SCHEMAS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "WebSearch",
+      description:
+        "Search the web (DuckDuckGo) for up-to-date info, docs, error messages, or library usage. Returns ranked title/url/snippet results. Use when local files don't have the answer and you need current external information. Degrades gracefully when offline.",
+      parameters: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string", description: "The search query" },
+          num: { type: "number", description: "Max results (default 6, max 10)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "WebFetch",
+      description:
+        "Fetch a URL and return its readable text content (HTML stripped). Use to read a doc page, a GitHub README, an issue, or any link — including ones surfaced by WebSearch. Only http(s) URLs.",
+      parameters: {
+        type: "object",
+        required: ["url"],
+        properties: {
+          url: { type: "string", description: "The http(s) URL to fetch" },
+          prompt: { type: "string", description: "What you're looking for on the page (optional, advisory)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "IndexProject",
+      description:
+        "Build (or rebuild) the semantic code index for this project so SemanticSearch works. Run this once per project, or after large changes. Requires the local embedding model; it will tell you how to install it if missing.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "SemanticSearch",
+      description:
+        "Find code by MEANING, not exact text — describe what you're looking for in natural language (e.g. \"where tool calls are approved\" or \"the retry/backoff logic\"). Returns the most relevant file ranges. Prefer this over Grep when you don't know the exact symbol. Needs an index (run IndexProject first).",
+      parameters: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string", description: "Natural-language description of the code you want" },
+          k: { type: "number", description: "How many results (default 6, max 12)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "Task",
+      description:
+        "Delegate a self-contained sub-investigation to a fresh sub-agent that can Read/Glob/Grep/SemanticSearch/WebSearch/Bash and reports back a concise answer. Use it to explore a question or area in parallel WITHOUT cluttering your own context (e.g. \"find every place X is configured\", \"summarize how auth works\"). The sub-agent is read-only (it cannot edit files) and cannot spawn further sub-agents. Emit multiple Task calls in one turn to run them concurrently.",
+      parameters: {
+        type: "object",
+        required: ["description", "prompt"],
+        properties: {
+          description: { type: "string", description: "Short (3-6 word) label for the sub-task" },
+          prompt: { type: "string", description: "The full, self-contained instruction for the sub-agent — it does not see this conversation, so include all needed context" },
+        },
+      },
+    },
+  },
 ];
 
 /** Tools that only read state, manage the queue, or write project memory — safe to auto-run. */
-export const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "List", "TaskList", "TaskAdd", "TaskUpdate", "RememberProject"]);
+export const READ_ONLY_TOOLS = new Set([
+  "Read", "Glob", "Grep", "List", "TaskList", "TaskAdd", "TaskUpdate", "RememberProject",
+  // Network reads + the explore-only sub-agent + the (project-local) index build.
+  "WebSearch", "WebFetch", "SemanticSearch", "IndexProject", "Task",
+]);
 
 /** Tools that change the filesystem or run commands — gated by approval. */
 export const MUTATING_TOOLS = new Set(["Write", "Edit", "MultiEdit", "Bash"]);
@@ -283,6 +360,11 @@ Telling the user "run this command" or "I'll apply this change" or showing a \`\
 ## Project memory
 - Your accumulated knowledge of this codebase is loaded above (from .rodeo/memory.md). Trust it and build on it — don't re-discover what you already noted.
 - Whenever you learn something durable (architecture, where things live, conventions, gotchas, decisions), call **RememberProject** to save it so future sessions know it too.
+
+## Finding code & the web
+- To locate code by MEANING (you don't know the exact symbol), use **SemanticSearch**; for an exact string/regex use **Grep**. If SemanticSearch says there's no index, run **IndexProject** once.
+- For current external info, library docs, or an unfamiliar error, use **WebSearch** then **WebFetch** the best link. These degrade gracefully offline — if a web tool reports you're offline, just continue with local tools.
+- To explore a side-question without bloating your own context, delegate it with **Task** (a read-only sub-agent). Fire several Task calls in one turn to investigate in parallel.
 ${auditBlock}${autonomyBlock}
 ## Output
 - Be concise. Lead with what you did. Show diffs/snippets, not whole files.
