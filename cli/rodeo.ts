@@ -7763,28 +7763,23 @@ async function runSubAgent(
     process.stdout.write(`${c.purple}│${c.reset} ${c.dim}${spinnerFrames[iterations % spinnerFrames.length]} Iteration ${iterations}...${c.reset}\r`);
 
     try {
+      // Local → native /api/chat (real num_ctx); server → OpenAI proxy.
+      const { url: subUrl, body: subBody } = buildChatRequest({
+        messages: subMessages,
+        tools: modelSupportsTools(CONFIG.model) ? agentTools : undefined,
+        stream: false,
+        temperature: 0.2,
+        maxTokens: 2048,
+      });
       const response = await fetchWithRetry(
-        chatUrl(),
+        subUrl,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${CONFIG.apiKey}`,
           },
-          body: JSON.stringify({
-            model: CONFIG.model,
-            messages: subMessages.map((m) => ({
-              role: m.role,
-              content: m.content,
-              tool_calls: m.tool_calls,
-              tool_call_id: m.tool_call_id,
-            })),
-            tools: modelSupportsTools(CONFIG.model) ? agentTools : undefined,
-            stream: false, // Non-streaming for sub-agents
-            temperature: 0.2,
-            max_tokens: 2048,
-            ...(CONFIG.local ? { keep_alive: "30m" } : {}),
-          }),
+          body: JSON.stringify(subBody),
           // Non-streaming: the WHOLE completion must finish before we get bytes
           // back, so a cold-loaded local model needs the full budget — not less
           // than the streaming main loop. 30s was far too short for a 14b.
@@ -7799,32 +7794,37 @@ async function runSubAgent(
         break;
       }
 
-      const data = await response.json() as {
-        choices?: Array<{
-          message?: {
-            content?: string;
-            tool_calls?: any[];
-          };
-        }>;
-        usage?: {
-          prompt_tokens: number;
-          completion_tokens: number;
-        };
-      };
+      const data = await response.json() as any;
 
-      const assistantMessage = data.choices?.[0]?.message;
+      // Native /api/chat returns { message, prompt_eval_count, eval_count };
+      // the OpenAI proxy returns { choices:[{message}], usage }.
+      const assistantMessage = CONFIG.local ? data.message : data.choices?.[0]?.message;
       if (!assistantMessage) {
         console.log(`\n${c.purple}│${c.reset} ${c.yellow}No response from model${c.reset}`);
         break;
       }
 
       // Track token usage from sub-agent calls
-      if (data.usage) {
+      if (CONFIG.local) {
+        if (data.prompt_eval_count || data.eval_count) {
+          recordTokenUsage(data.prompt_eval_count || 0, data.eval_count || 0, CONFIG.model);
+        }
+      } else if (data.usage) {
         recordTokenUsage(data.usage.prompt_tokens, data.usage.completion_tokens, CONFIG.model);
       }
 
       const content = assistantMessage.content || "";
-      let toolCalls = assistantMessage.tool_calls || [];
+      // Normalize tool-call args to STRINGS — native returns them as objects, but
+      // downstream (executeToolForSubAgent) JSON.parses a string.
+      let toolCalls = (assistantMessage.tool_calls || []).map((tc: any, i: number) => ({
+        id: tc.id || `call_${i}`,
+        function: {
+          name: tc.function?.name,
+          arguments: typeof tc.function?.arguments === "string"
+            ? tc.function.arguments
+            : JSON.stringify(tc.function?.arguments ?? {}),
+        },
+      }));
 
       // Recover tool calls the model emitted as TEXT instead of native
       // tool_calls (coder models under Ollama) — same fallback as the main loop,
@@ -9910,6 +9910,114 @@ function wrappedRowCount(text: string, width: number): number {
 }
 
 // Stream response handler for faster output with rich formatting (Claude Code style)
+// ============================================================================
+// Native Ollama transport (local mode)
+//
+// Ollama's OpenAI-compat endpoint (/v1/chat/completions) IGNORES num_ctx and
+// silently caps context at its server default (~4096 tokens) — which truncates
+// conversation history and makes the model "forget" earlier messages. The
+// NATIVE /api/chat endpoint honors num_ctx, so in local mode we talk to it and
+// translate to/from the OpenAI shapes the rest of the loop already uses.
+// ============================================================================
+const NUM_CTX = parseInt(process.env.RODEO_NUM_CTX || "") || 16384;
+
+function nativeChatUrl(): string {
+  const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
+  return `${base}/api/chat`;
+}
+
+/** OpenAI-shaped messages → native /api/chat shape (tool-call args become an
+ *  OBJECT; tool results carry an optional tool_name, matched to calls by order). */
+function toNativeMessages(msgs: Message[]): any[] {
+  return msgs.map((m: any) => {
+    const out: any = { role: m.role, content: m.content ?? "" };
+    if (Array.isArray(m.tool_calls) && m.tool_calls.length) {
+      out.tool_calls = m.tool_calls.map((tc: any) => {
+        let args: any = {};
+        try {
+          args = typeof tc.function?.arguments === "string"
+            ? JSON.parse(tc.function.arguments || "{}")
+            : (tc.function?.arguments ?? {});
+        } catch { args = {}; }
+        return { function: { name: tc.function?.name, arguments: args } };
+      });
+    }
+    if (m.role === "tool") {
+      const name = m.name || m.tool_name;
+      if (name) out.tool_name = name;
+    }
+    return out;
+  });
+}
+
+/** One native /api/chat stream object → the OpenAI chunk shape streamChat reads.
+ *  Native sends each tool call complete (args as an object) in a single chunk;
+ *  we stringify args back to the OpenAI delta form so downstream JSON.parse works. */
+function nativeToOpenAIChunk(native: any): any {
+  const msg = native?.message || {};
+  const delta: any = {};
+  if (msg.content) delta.content = msg.content;
+  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+    delta.tool_calls = msg.tool_calls.map((tc: any, i: number) => ({
+      index: i,
+      id: `call_${i}`,
+      function: {
+        name: tc.function?.name,
+        arguments: typeof tc.function?.arguments === "string"
+          ? tc.function.arguments
+          : JSON.stringify(tc.function?.arguments ?? {}),
+      },
+    }));
+  }
+  const chunk: any = { choices: [{ delta }] };
+  if (native?.done) {
+    chunk.usage = { prompt_tokens: native.prompt_eval_count || 0, completion_tokens: native.eval_count || 0 };
+  }
+  return chunk;
+}
+
+/** Build the request URL + body for a chat call, native (local) or OpenAI (server). */
+function buildChatRequest(opts: {
+  messages: Message[];
+  tools: any[] | undefined;
+  stream: boolean;
+  temperature: number;
+  maxTokens?: number;
+  serverExtras?: Record<string, unknown>;
+}): { url: string; body: any } {
+  if (CONFIG.local) {
+    return {
+      url: nativeChatUrl(),
+      body: {
+        model: CONFIG.model,
+        messages: toNativeMessages(opts.messages),
+        ...(opts.tools ? { tools: opts.tools } : {}),
+        stream: opts.stream,
+        keep_alive: "30m",
+        options: {
+          temperature: opts.temperature,
+          num_ctx: NUM_CTX,
+          ...(opts.maxTokens ? { num_predict: opts.maxTokens } : {}),
+        },
+      },
+    };
+  }
+  return {
+    url: chatUrl(),
+    body: {
+      model: CONFIG.model,
+      messages: opts.messages.map((m: any) => ({
+        role: m.role, content: m.content, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id,
+      })),
+      ...(opts.tools ? { tools: opts.tools } : {}),
+      stream: opts.stream,
+      temperature: opts.temperature,
+      max_tokens: opts.maxTokens,
+      ...(opts.serverExtras || {}),
+    },
+  };
+}
+
 async function streamChat(response: Response): Promise<{ content: string; tool_calls: any[]; usage?: { prompt_tokens: number; completion_tokens: number } }> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error("No response body");
@@ -9932,12 +10040,23 @@ async function streamChat(response: Response): Promise<{ content: string; tool_c
     buffer = lines.pop() || "";
 
     for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const data = line.slice(6);
-      if (data === "[DONE]") continue;
+      // Local mode streams native /api/chat (newline-delimited JSON, one full
+      // object per line); server mode streams OpenAI SSE ("data: {...}").
+      let parsed: any;
+      if (CONFIG.local) {
+        const t = line.trim();
+        if (!t) continue;
+        let native: any;
+        try { native = JSON.parse(t); } catch { continue; }
+        parsed = nativeToOpenAIChunk(native);
+      } else {
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6);
+        if (data === "[DONE]") continue;
+        try { parsed = JSON.parse(data); } catch { continue; }
+      }
 
-      try {
-        const parsed = JSON.parse(data);
+      {
         const delta = parsed.choices?.[0]?.delta;
 
         if (delta?.content) {
@@ -9991,7 +10110,7 @@ async function streamChat(response: Response): Promise<{ content: string; tool_c
             completion_tokens: parsed.usage.completion_tokens || 0,
           };
         }
-      } catch {}
+      }
     }
   }
 
@@ -10189,35 +10308,30 @@ async function chat(userInput: string): Promise<void> {
     const timeoutId = setTimeout(() => currentAbortController?.abort(), timeoutMs);
 
     try {
+      // Local mode → native /api/chat (honors num_ctx, so history isn't
+      // truncated to Ollama's 4096 default). Server mode → OpenAI proxy.
+      const { url: mainUrl, body: mainBody } = buildChatRequest({
+        messages,
+        tools: modelSupportsTools(CONFIG.model) ? [...filterToolsForAgent(CLI_TOOLS), ...stdioMcpToolSchemas()] : undefined,
+        stream: true,
+        temperature: CONFIG.speedMode ? 0.1 : 0.2,
+        maxTokens: CONFIG.speedMode ? 2048 : CONFIG.maxTokens,
+        serverExtras: {
+          instance_id: cliInstanceId,
+          project_root: process.cwd(),
+          agentic: false,
+          agent: currentAgent, // Send current agent to server
+        },
+      });
       const response = await fetchWithRetry(
-        chatUrl(),
+        mainUrl,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${CONFIG.apiKey}`,
           },
-          body: JSON.stringify({
-            model: CONFIG.model,
-            messages: messages.map((m) => ({
-              role: m.role,
-              content: m.content,
-              tool_calls: m.tool_calls,
-              tool_call_id: m.tool_call_id,
-            })),
-            // Filter tools based on current agent, plus any connected MCP tools
-            tools: modelSupportsTools(CONFIG.model) ? [...filterToolsForAgent(CLI_TOOLS), ...stdioMcpToolSchemas()] : undefined,
-            stream: true,
-            instance_id: cliInstanceId,
-            project_root: process.cwd(),
-            agentic: false,
-            agent: currentAgent, // Send current agent to server
-            temperature: CONFIG.speedMode ? 0.1 : 0.2,
-            max_tokens: CONFIG.speedMode ? 2048 : CONFIG.maxTokens,
-            // Keep the local model resident between turns (Ollama honors this on
-            // the OpenAI endpoint) — avoids a multi-second cold reload each turn.
-            ...(CONFIG.local ? { keep_alive: "30m" } : {}),
-          }),
+          body: JSON.stringify(mainBody),
           signal: currentAbortController.signal,
         },
         { maxRetries: 3, baseDelayMs: 1000 }
