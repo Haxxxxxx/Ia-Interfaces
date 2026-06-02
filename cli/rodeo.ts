@@ -1324,7 +1324,11 @@ function loadConfig(): RodeoConfig {
     local,
     apiKey: process.env.RODEO_API_KEY || fileConfig.apiKey || defaultApiKey,
     model: process.env.RODEO_MODEL || fileConfig.model || "qwen2.5:7b",
-    timeout: parseInt(process.env.RODEO_TIMEOUT || "") || fileConfig.timeout || 120000,
+    // 240s ceiling (was 120s): a COLD local model must finish loading + prompt
+    // eval before it returns the first byte, which can exceed 120s on a big
+    // prompt. Streaming means this only bounds time-to-first-token; warm turns
+    // (keep_alive) are fast, so a higher ceiling just prevents false timeouts.
+    timeout: parseInt(process.env.RODEO_TIMEOUT || "") || fileConfig.timeout || 240000,
     quickTimeout: parseInt(process.env.RODEO_QUICK_TIMEOUT || "") || fileConfig.quickTimeout || 30000,
     autoApprove: fileConfig.autoApprove || false,
     batchAutoApprove: fileConfig.batchAutoApprove ?? true, // Default ON for faster workflow
@@ -1642,13 +1646,17 @@ const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     name: "build",
     mode: "primary",
     description: "Default agent for writing and editing code",
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "SemanticSearch", "IndexProject", "AskUser", "AskUserQuestion", "NotebookEdit", "EnterPlanMode", "TaskOutput", "TodoCreate", "TodoUpdate", "TodoList", "TodoGet"],
+    // Trimmed for local-model reliability: every extra tool is a hallucination
+    // surface (a 14b will fire a niche tool with a made-up arg). Dropped the
+    // footguns — TaskOutput (needs a real background-task id), NotebookEdit
+    // (jupyter-only), AskUserQuestion (AskUser already covers it).
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "SemanticSearch", "IndexProject", "AskUser", "EnterPlanMode", "TodoCreate", "TodoUpdate", "TodoList", "TodoGet"],
   },
   plan: {
     name: "plan",
     mode: "primary",
     description: "Research and planning agent - read-only",
-    allowedTools: ["Read", "Glob", "Grep", "List", "WebSearch", "WebFetch", "SemanticSearch", "AskUser", "AskUserQuestion", "Task", "ExitPlanMode"],
+    allowedTools: ["Read", "Glob", "Grep", "List", "WebSearch", "WebFetch", "SemanticSearch", "AskUser", "Task", "ExitPlanMode"],
   },
   explore: {
     name: "explore",
@@ -1660,7 +1668,7 @@ const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     name: "general",
     mode: "subagent",
     description: "General purpose subagent with full capabilities",
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "SemanticSearch", "IndexProject", "AskUser", "AskUserQuestion", "NotebookEdit"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "SemanticSearch", "IndexProject", "AskUser"],
   },
 };
 
@@ -9304,6 +9312,13 @@ The user will NOT tell you which file to edit. You MUST find it yourself.
 - When you don't know the exact symbol/string, use SemanticSearch (finds code by MEANING). For an exact token/regex, use Grep. If SemanticSearch says there's no index, run IndexProject once, then search again.
 - For unfamiliar errors, library docs, or current external info: WebSearch, then WebFetch the best link (both degrade gracefully offline). Delegate side-investigations to a Task sub-agent to keep your own context lean.
 
+## HONESTY & KNOWING YOUR LIMITS (you run offline as a local model)
+You are the user's OFFLINE coding partner. You are reliable at FOCUSED work: reading/searching code, single- or few-file edits, targeted refactors, explanations, and running/verifying commands. You are LESS reliable at very large, vague, or deeply cross-cutting tasks.
+- NEVER invent work the user didn't ask for, and NEVER call a tool with a made-up argument or id. If you don't have a real value (e.g. you never launched a background task, so you have no task id), DO NOT call that tool — just answer or use a tool you do have valid inputs for.
+- After a tool returns, USE its result to answer or take the next real step — don't fire another unrelated tool.
+- If the request is too broad or ambiguous to do well in one pass, DON'T guess. Use AskUser to offer 2-4 concrete options: narrow it to one file/step you can do now, do it in plan mode first, or split it into a sequence — and let the user pick.
+- Be honest when a task is beyond what you can do reliably offline. Say so plainly and propose the most accurate next step (a smaller scope, a different approach, or revisiting it with a stronger model when back online) rather than producing a confident but low-quality attempt.
+
 ## GOLDEN RULE: USE REAL PATHS FROM SEARCH
 When Glob/Grep/List return file paths, use those EXACT paths in subsequent Read/Edit/Write calls.
 Example workflow:
@@ -9919,7 +9934,13 @@ function wrappedRowCount(text: string, width: number): number {
 // NATIVE /api/chat endpoint honors num_ctx, so in local mode we talk to it and
 // translate to/from the OpenAI shapes the rest of the loop already uses.
 // ============================================================================
-const NUM_CTX = parseInt(process.env.RODEO_NUM_CTX || "") || 16384;
+// 8192 (not higher) by default: a larger num_ctx means a bigger KV cache AND
+// slower cold prompt-eval — on a cold 14b, num_ctx 16384 + a big system prompt
+// took >120s just to return the first byte and tripped the request timeout.
+// 8192 still doubles the OpenAI-endpoint's 4096 cap so history is retained,
+// while keeping the first turn responsive. Power users can raise RODEO_NUM_CTX
+// (and RODEO_TIMEOUT alongside it).
+const NUM_CTX = parseInt(process.env.RODEO_NUM_CTX || "") || 8192;
 
 function nativeChatUrl(): string {
   const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
@@ -10093,7 +10114,16 @@ async function streamChat(response: Response): Promise<{ content: string; tool_c
                 }
               }
               if (tc.function?.arguments) {
-                tool_calls[tc.index].function.arguments += tc.function.arguments;
+                // Native /api/chat (local) sends each tool call COMPLETE per
+                // chunk (args is a whole object) and may repeat it across the
+                // message + done chunks — so REPLACE, or the args get doubled
+                // ("...}{...}" → invalid JSON). OpenAI SSE (server) streams args
+                // as fragments, so those must be APPENDED.
+                if (CONFIG.local) {
+                  tool_calls[tc.index].function.arguments = tc.function.arguments;
+                } else {
+                  tool_calls[tc.index].function.arguments += tc.function.arguments;
+                }
                 // Show a subtle progress indicator
                 if (tool_calls[tc.index].function.arguments.length % 50 === 0) {
                   process.stdout.write(`${c.dim}.${c.reset}`);
