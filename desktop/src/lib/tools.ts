@@ -259,7 +259,7 @@ export const TOOL_SCHEMAS = [
     function: {
       name: "SemanticSearch",
       description:
-        "Find code by MEANING, not exact text — describe what you're looking for in natural language (e.g. \"where tool calls are approved\" or \"the retry/backoff logic\"). Returns the most relevant file ranges. Prefer this over Grep when you don't know the exact symbol. Needs an index (run IndexProject first).",
+        "Find code by MEANING (semantic search over an embedded index) when you don't know the exact symbol or string. Pass a short natural-language description, derived from the CURRENT task, of the code or behavior you want; it returns the most relevant file ranges. For an exact token or regex use Grep instead. Requires an index — run IndexProject first if there isn't one.",
       parameters: {
         type: "object",
         required: ["query"],

@@ -501,7 +501,7 @@ Note: This tool cannot access authenticated pages (Google Docs, private repos, e
     type: "function",
     function: {
       name: "SemanticSearch",
-      description: "Find code by MEANING, not exact text — describe what you want in natural language (e.g. \"where tool calls are approved\" or \"the retry/backoff logic\"). Returns the most relevant file ranges. Prefer this over Grep when you don't know the exact symbol. Needs an index (run IndexProject first).",
+      description: "Find code by MEANING (semantic search over an embedded index) when you don't know the exact symbol or string. Pass a short natural-language description, derived from the CURRENT task, of the code or behavior you want; it returns the most relevant file ranges. For an exact token or regex use Grep instead. Requires an index — run IndexProject first if there isn't one.",
       parameters: {
         type: "object",
         required: ["query"],
@@ -2306,11 +2306,13 @@ function cosineSim(a: number[], b: number[]): number {
 function listSemSourceFiles(): string[] {
   let raw = "";
   try {
-    raw = execSync("rg --files", { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 32 * 1024 * 1024 });
+    // 2>/dev/null so a missing ripgrep doesn't leak "rg: command not found".
+    raw = execSync("rg --files 2>/dev/null", { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 32 * 1024 * 1024 });
+    if (!raw.trim()) throw new Error("rg returned nothing");
   } catch {
     try {
       raw = execSync(
-        "find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/target/*' -not -path '*/dist/*'",
+        "find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/target/*' -not -path '*/dist/*' 2>/dev/null",
         { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 32 * 1024 * 1024 }
       );
     } catch { return []; }
@@ -6911,6 +6913,11 @@ function smartReadFile(filePath: string): string {
 // Uses pure Node.js for cross-platform compatibility
 // IMPROVED: Increased limits for large codebases
 function searchFiles(pattern: string, dir: string = "."): string {
+  // Guard against a missing/empty pattern (a weak model sometimes calls Glob
+  // with no args) — return guidance instead of crashing on pattern.includes().
+  if (!pattern || typeof pattern !== "string" || pattern === "undefined") {
+    return `${c.yellow}⚠${c.reset} Glob needs a 'pattern' argument (e.g. "**/*.py", "*.ts", "src/**/*.tsx"). Use List to explore directories first.`;
+  }
   const IGNORED_DIRS = new Set([
     "node_modules", ".git", "dist", "build", ".next", "__pycache__",
     ".venv", "venv", "target", ".cache", ".turbo", ".output",
@@ -9702,13 +9709,13 @@ Supports regex. Returns file paths and line numbers - use these paths in Read ca
 
 ## WebSearch - Search the web
 \`\`\`json
-{"query": "how to implement OAuth in Node.js"}
+{"query": "<terms derived from the CURRENT task>"}
 \`\`\`
-Use for: documentation, API references, error solutions, best practices.
+Use for: documentation, API references, error solutions, best practices. The example values below are placeholders — NEVER run them as-is; always derive arguments from the user's actual request.
 
 ## Task - Spawn sub-agent (USE PROACTIVELY - DON'T WAIT TO BE ASKED)
 \`\`\`json
-{"description": "explore auth files", "prompt": "Find all authentication-related files and summarize their structure", "subagent_type": "Explore"}
+{"description": "<short label>", "prompt": "<full self-contained instruction for the sub-agent>", "subagent_type": "Explore"}
 \`\`\`
 
 **AUTOMATICALLY spawn sub-agents for these patterns:**
