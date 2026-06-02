@@ -14,7 +14,7 @@ import * as readline from "readline";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { execSync, spawn } from "child_process";
+import { execSync, spawn, type ChildProcess } from "child_process";
 import * as crypto from "crypto";
 
 // ============================================
@@ -485,6 +485,29 @@ Note: This tool cannot access authenticated pages (Google Docs, private repos, e
         required: ["taskId"],
         properties: {
           taskId: { type: "string", description: "Task ID to retrieve" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "IndexProject",
+      description: "Build (or rebuild) the semantic code index for this project so SemanticSearch works. Run once per project, or after large changes. Needs the local embedding model (nomic-embed-text); it tells you how to install it if missing.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "SemanticSearch",
+      description: "Find code by MEANING, not exact text — describe what you want in natural language (e.g. \"where tool calls are approved\" or \"the retry/backoff logic\"). Returns the most relevant file ranges. Prefer this over Grep when you don't know the exact symbol. Needs an index (run IndexProject first).",
+      parameters: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string", description: "Natural-language description of the code you want" },
+          k: { type: "number", description: "How many results (default 6, max 12)" },
         },
       },
     },
@@ -1618,25 +1641,25 @@ const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
     name: "build",
     mode: "primary",
     description: "Default agent for writing and editing code",
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "AskUser", "AskUserQuestion", "NotebookEdit", "EnterPlanMode", "TaskOutput", "TodoCreate", "TodoUpdate", "TodoList", "TodoGet"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "SemanticSearch", "IndexProject", "AskUser", "AskUserQuestion", "NotebookEdit", "EnterPlanMode", "TaskOutput", "TodoCreate", "TodoUpdate", "TodoList", "TodoGet"],
   },
   plan: {
     name: "plan",
     mode: "primary",
     description: "Research and planning agent - read-only",
-    allowedTools: ["Read", "Glob", "Grep", "List", "WebSearch", "WebFetch", "AskUser", "AskUserQuestion", "Task", "ExitPlanMode"],
+    allowedTools: ["Read", "Glob", "Grep", "List", "WebSearch", "WebFetch", "SemanticSearch", "AskUser", "AskUserQuestion", "Task", "ExitPlanMode"],
   },
   explore: {
     name: "explore",
     mode: "subagent",
     description: "Fast codebase exploration - read-only",
-    allowedTools: ["Read", "Glob", "Grep", "List"],
+    allowedTools: ["Read", "Glob", "Grep", "List", "SemanticSearch"],
   },
   general: {
     name: "general",
     mode: "subagent",
     description: "General purpose subagent with full capabilities",
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "AskUser", "AskUserQuestion", "NotebookEdit"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "WebFetch", "SemanticSearch", "IndexProject", "AskUser", "AskUserQuestion", "NotebookEdit"],
   },
 };
 
@@ -2012,11 +2035,17 @@ ${c.dim}Tip: Use /speed for faster responses${c.reset}
 
 interface MCPServerConfig {
   name: string;
-  type: "figma" | "github" | "slack" | "notion" | "custom";
+  type: "figma" | "github" | "slack" | "notion" | "custom" | "stdio";
   enabled: boolean;
   apiKey?: string;
   baseUrl?: string;
   options?: Record<string, any>;
+  // Generic stdio MCP servers (type "stdio"): an external process we speak
+  // JSON-RPC to over stdin/stdout (e.g. @modelcontextprotocol/server-filesystem).
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
 }
 
 interface MCPConfig {
@@ -2049,6 +2078,306 @@ function saveMCPConfig(config: MCPConfig): void {
 function getEnabledMCPServers(): MCPServerConfig[] {
   const config = loadMCPConfig();
   return config.servers.filter(s => s.enabled);
+}
+
+// ============================================
+// Generic stdio MCP client (JSON-RPC over a child process)
+//
+// Lets Rodeo connect to standard MCP servers (filesystem, git, fetch, custom)
+// and inherit their tools as `mcp__<server>__<tool>`. Node spawns the child
+// directly — no native bridge needed. Connection is lazy + best-effort: a
+// server that fails to start just doesn't contribute tools.
+// ============================================
+interface StdioMcpConn {
+  proc: ChildProcess;
+  nextId: number;
+  pending: Map<number, { resolve: (v: any) => void; reject: (e: any) => void; timer: NodeJS.Timeout }>;
+  buffer: string;
+  tools: { name: string; description?: string; inputSchema?: any }[];
+  ready: boolean;
+  error?: string;
+}
+const stdioMcpConns = new Map<string, StdioMcpConn>();
+
+function stdioMcpServers(): MCPServerConfig[] {
+  return loadMCPConfig().servers.filter((s) => s.enabled && s.type === "stdio" && s.command);
+}
+
+function mcpRpcRequest(conn: StdioMcpConn, method: string, params: unknown, timeoutMs = 20000): Promise<any> {
+  const id = conn.nextId++;
+  const body = JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n";
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      conn.pending.delete(id);
+      reject(new Error(`MCP ${method} timed out`));
+    }, timeoutMs);
+    conn.pending.set(id, { resolve, reject, timer });
+    try {
+      conn.proc.stdin?.write(body);
+    } catch (e) {
+      conn.pending.delete(id);
+      clearTimeout(timer);
+      reject(e);
+    }
+  });
+}
+
+function mcpRpcNotify(conn: StdioMcpConn, method: string, params: unknown): void {
+  try { conn.proc.stdin?.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n"); } catch { /* ignore */ }
+}
+
+function connectStdioMcp(cfg: MCPServerConfig): StdioMcpConn {
+  const proc = spawn(cfg.command!, cfg.args || [], {
+    env: { ...process.env, ...(cfg.env || {}), PATH: `${process.env.PATH || ""}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` },
+    cwd: cfg.cwd || process.cwd(),
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const conn: StdioMcpConn = { proc, nextId: 1, pending: new Map(), buffer: "", tools: [], ready: false };
+  proc.stdout?.on("data", (d: Buffer) => {
+    conn.buffer += d.toString();
+    let idx: number;
+    while ((idx = conn.buffer.indexOf("\n")) >= 0) {
+      const line = conn.buffer.slice(0, idx).trim();
+      conn.buffer = conn.buffer.slice(idx + 1);
+      if (!line) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.id != null && conn.pending.has(msg.id)) {
+          const p = conn.pending.get(msg.id)!;
+          conn.pending.delete(msg.id);
+          clearTimeout(p.timer);
+          if (msg.error) p.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+          else p.resolve(msg.result);
+        }
+      } catch { /* not a complete/valid JSON line */ }
+    }
+  });
+  proc.on("error", (e) => { conn.error = String(e); conn.ready = false; });
+  proc.on("exit", () => {
+    conn.ready = false;
+    for (const p of conn.pending.values()) { clearTimeout(p.timer); p.reject(new Error("MCP server exited")); }
+    conn.pending.clear();
+  });
+  return conn;
+}
+
+async function ensureStdioMcpConnected(): Promise<void> {
+  for (const cfg of stdioMcpServers()) {
+    if (stdioMcpConns.get(cfg.name)?.ready) continue;
+    const conn = connectStdioMcp(cfg);
+    stdioMcpConns.set(cfg.name, conn);
+    try {
+      await mcpRpcRequest(conn, "initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "rodeo", version: "1.0" },
+      });
+      mcpRpcNotify(conn, "notifications/initialized", {});
+      const res = await mcpRpcRequest(conn, "tools/list", {});
+      conn.tools = Array.isArray(res?.tools) ? res.tools : [];
+      conn.ready = true;
+    } catch (e) {
+      conn.error = e instanceof Error ? e.message : String(e);
+      try { conn.proc.kill(); } catch { /* ignore */ }
+    }
+  }
+  // Drop connections whose config was removed/disabled.
+  const live = new Set(stdioMcpServers().map((s) => s.name));
+  for (const [name, conn] of [...stdioMcpConns]) {
+    if (!live.has(name)) { try { conn.proc.kill(); } catch { /* ignore */ } stdioMcpConns.delete(name); }
+  }
+}
+
+/** Tool schemas for connected stdio MCP servers (call after ensureStdioMcpConnected). */
+function stdioMcpToolSchemas(): any[] {
+  const out: any[] = [];
+  for (const [name, conn] of stdioMcpConns) {
+    if (!conn.ready) continue;
+    for (const t of conn.tools) {
+      out.push({
+        type: "function",
+        function: {
+          name: `mcp__${name}__${t.name}`,
+          description: (t.description || `${t.name} (via MCP server ${name})`).slice(0, 1024),
+          parameters: t.inputSchema && typeof t.inputSchema === "object" ? t.inputSchema : { type: "object", properties: {} },
+        },
+      });
+    }
+  }
+  return out;
+}
+
+function formatMcpResult(res: any): string {
+  if (!res) return "(no result)";
+  const content = res.content;
+  if (Array.isArray(content)) {
+    const parts = content.map((c: any) => {
+      if (c?.type === "text") return c.text;
+      if (c?.type === "resource" && c.resource?.text) return c.resource.text;
+      return JSON.stringify(c);
+    });
+    const text = parts.join("\n").trim();
+    return (res.isError ? "[tool reported an error]\n" : "") + (text || "(empty result)");
+  }
+  return typeof res === "string" ? res : JSON.stringify(res);
+}
+
+async function callStdioMcpTool(fullName: string, args: any): Promise<string> {
+  const rest = fullName.slice("mcp__".length);
+  const sep = rest.indexOf("__");
+  if (sep === -1) return `Error: malformed MCP tool name "${fullName}"`;
+  const server = rest.slice(0, sep);
+  const tool = rest.slice(sep + 2);
+  await ensureStdioMcpConnected();
+  const conn = stdioMcpConns.get(server);
+  if (!conn?.ready) return `Error: MCP server "${server}" is not connected${conn?.error ? ` (${conn.error})` : ""}.`;
+  try {
+    const res = await mcpRpcRequest(conn, "tools/call", { name: tool, arguments: args || {} });
+    return formatMcpResult(res);
+  } catch (e) {
+    return `Error calling ${tool}: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+// Kill any spawned MCP children when the process exits.
+process.on("exit", () => { for (const conn of stdioMcpConns.values()) { try { conn.proc.kill(); } catch { /* ignore */ } } });
+
+// ============================================
+// Semantic code search (local RAG via Ollama embeddings)
+//
+// IndexProject embeds the repo into <project>/.rodeo/index.json; SemanticSearch
+// answers natural-language queries by cosine similarity. Mirrors the desktop
+// app's semantic.ts. Fully offline once nomic-embed-text is pulled.
+// ============================================
+const EMBED_MODEL = "nomic-embed-text";
+const SEM_CODE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|kt|swift|c|h|cpp|hpp|cs|rb|php|sql|sh|toml|json|md|yaml|yml|css|scss|html|vue|svelte)$/i;
+const SEM_CHUNK_LINES = 50;
+const SEM_CHUNK_STEP = 40;
+const SEM_MAX_FILES = 600;
+const SEM_MAX_CHUNKS = 2000;
+const SEM_MAX_FILE_BYTES = 200_000;
+
+interface SemChunk { path: string; start: number; end: number; text: string; vec: number[] }
+interface SemIndex { model: string; createdAt: number; chunks: SemChunk[] }
+
+function semIndexPath(): string {
+  return path.join(process.cwd(), ".rodeo", "index.json");
+}
+
+function embedBaseUrl(): string {
+  return (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
+}
+
+async function embedTexts(inputs: string[]): Promise<number[][]> {
+  const base = embedBaseUrl();
+  // Prefer the batch /api/embed endpoint; fall back to per-item /api/embeddings.
+  try {
+    const res = await fetch(`${base}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: EMBED_MODEL, input: inputs }),
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      if (Array.isArray(data.embeddings)) return data.embeddings;
+    }
+  } catch { /* fall through */ }
+  const out: number[][] = [];
+  for (const input of inputs) {
+    const res = await fetch(`${base}/api/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: EMBED_MODEL, prompt: input }),
+    });
+    if (!res.ok) throw new Error(`embedding failed (${res.status}) — is "${EMBED_MODEL}" pulled? Run: ollama pull ${EMBED_MODEL}`);
+    const data: any = await res.json();
+    out.push(data.embedding || []);
+  }
+  return out;
+}
+
+function cosineSim(a: number[], b: number[]): number {
+  let dot = 0, na = 0, nb = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+}
+
+function listSemSourceFiles(): string[] {
+  let raw = "";
+  try {
+    raw = execSync("rg --files", { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 32 * 1024 * 1024 });
+  } catch {
+    try {
+      raw = execSync(
+        "find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/target/*' -not -path '*/dist/*'",
+        { cwd: process.cwd(), encoding: "utf-8", maxBuffer: 32 * 1024 * 1024 }
+      );
+    } catch { return []; }
+  }
+  return raw.split("\n").map((s) => s.trim()).filter((s) => s && SEM_CODE_EXT.test(s)).slice(0, SEM_MAX_FILES);
+}
+
+function chunkSemFile(rel: string, content: string): Omit<SemChunk, "vec">[] {
+  const lines = content.split("\n");
+  const chunks: Omit<SemChunk, "vec">[] = [];
+  for (let i = 0; i < lines.length; i += SEM_CHUNK_STEP) {
+    const text = lines.slice(i, i + SEM_CHUNK_LINES).join("\n").trim();
+    if (text.length >= 20) chunks.push({ path: rel, start: i + 1, end: Math.min(i + SEM_CHUNK_LINES, lines.length), text });
+    if (i + SEM_CHUNK_LINES >= lines.length) break;
+  }
+  return chunks;
+}
+
+async function buildSemanticIndex(): Promise<string> {
+  const files = listSemSourceFiles();
+  if (!files.length) return "No source files found to index.";
+  const pending: Omit<SemChunk, "vec">[] = [];
+  for (const rel of files) {
+    if (pending.length >= SEM_MAX_CHUNKS) break;
+    const abs = path.resolve(process.cwd(), rel);
+    let content = "";
+    try { content = fs.readFileSync(abs, "utf-8"); } catch { continue; }
+    if (content.length > SEM_MAX_FILE_BYTES) continue;
+    for (const ch of chunkSemFile(rel.replace(/^\.\//, ""), content)) {
+      pending.push(ch);
+      if (pending.length >= SEM_MAX_CHUNKS) break;
+    }
+  }
+  const chunks: SemChunk[] = [];
+  const BATCH = 32;
+  for (let i = 0; i < pending.length; i += BATCH) {
+    const batch = pending.slice(i, i + BATCH);
+    let vecs: number[][];
+    try { vecs = await embedTexts(batch.map((b) => b.text)); }
+    catch (e) { return `${c.red}Error:${c.reset} ${e instanceof Error ? e.message : String(e)}`; }
+    batch.forEach((b, j) => chunks.push({ ...b, vec: vecs[j] || [] }));
+  }
+  const index: SemIndex = { model: EMBED_MODEL, createdAt: Date.now(), chunks };
+  fs.mkdirSync(path.dirname(semIndexPath()), { recursive: true });
+  fs.writeFileSync(semIndexPath(), JSON.stringify(index));
+  return `Indexed ${chunks.length} chunks from ${files.length} files → .rodeo/index.json`;
+}
+
+async function semanticSearchQuery(query: string, k = 6): Promise<string> {
+  const q = String(query || "").trim();
+  if (!q) return "Error: empty query.";
+  let index: SemIndex;
+  try { index = JSON.parse(fs.readFileSync(semIndexPath(), "utf-8")); }
+  catch { return "No semantic index yet. Run IndexProject first (or ask me to \"index this project\"), then search again. Until then use Grep."; }
+  if (!index.chunks?.length) return "The semantic index is empty — re-run IndexProject.";
+  let qvec: number[];
+  try { qvec = (await embedTexts([q]))[0]; }
+  catch (e) { return `Error embedding query: ${e instanceof Error ? e.message : String(e)}`; }
+  const scored = index.chunks
+    .map((ch) => ({ ch, score: cosineSim(qvec, ch.vec) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, Math.min(12, k)));
+  const ageNote = Date.now() - index.createdAt > 1000 * 60 * 60 * 24
+    ? "\n(Index is over a day old — re-run IndexProject if results feel stale.)" : "";
+  return scored
+    .map(({ ch, score }) => `${ch.path}:${ch.start}-${ch.end}  (${score.toFixed(2)})\n${ch.text.split("\n").slice(0, 4).join("\n")}`)
+    .join("\n\n") + ageNote;
 }
 
 // ============================================
@@ -7201,7 +7530,15 @@ function normalizeToolName(name: string): string {
     typecheck: "typecheck",
     type_check: "typecheck",
     tsc: "typecheck",
+    // Semantic code search (RAG)
+    SemanticSearch: "semantic_search",
+    semantic_search: "semantic_search",
+    semantic: "semantic_search",
+    IndexProject: "index_project",
+    index_project: "index_project",
+    reindex: "index_project",
   };
+  // mcp__<server>__<tool> names pass through unchanged (handled in executeTool).
   return map[name] || name;
 }
 
@@ -7253,12 +7590,12 @@ const SUBAGENT_CONFIGS: Record<string, Omit<SubAgentConfig, "description" | "pro
   explore: {
     type: "Explore",
     maxIterations: 5,
-    allowedTools: ["Read", "Glob", "Grep", "List", "Tree", "FindDeepest", "Analyze"],
+    allowedTools: ["Read", "Glob", "Grep", "List", "Tree", "FindDeepest", "Analyze", "SemanticSearch"],
   },
   plan: {
     type: "Plan",
     maxIterations: 5,
-    allowedTools: ["Read", "Glob", "Grep", "List", "Tree", "FindDeepest", "Analyze", "WebSearch", "WebFetch"],
+    allowedTools: ["Read", "Glob", "Grep", "List", "Tree", "FindDeepest", "Analyze", "WebSearch", "WebFetch", "SemanticSearch"],
   },
   bash: {
     type: "Bash",
@@ -7283,7 +7620,7 @@ const SUBAGENT_CONFIGS: Record<string, Omit<SubAgentConfig, "description" | "pro
   general: {
     type: "general",
     maxIterations: 6,
-    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Tree", "FindDeepest", "Analyze", "TypeCheck", "WebSearch", "WebFetch"],
+    allowedTools: ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Tree", "FindDeepest", "Analyze", "TypeCheck", "WebSearch", "WebFetch", "SemanticSearch", "IndexProject"],
   },
 };
 
@@ -8102,6 +8439,14 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
       result = await webFetch(args.url || "", args.prompt || "Extract the main content");
       break;
 
+    case "index_project":
+      result = await buildSemanticIndex();
+      break;
+
+    case "semantic_search":
+      result = await semanticSearchQuery(args.query || args.q || "", Number(args.k) || 6);
+      break;
+
     case "task": {
       // Spawn a sub-agent for complex tasks
       const description = args.description || "sub-task";
@@ -8512,8 +8857,10 @@ async function executeTool(name: string, args: Record<string, any>): Promise<str
     }
 
     default:
-      // Check if this is an MCP tool (figma_, github_, slack_, notion_)
-      if (name.startsWith("figma_")) {
+      // Generic stdio MCP tools: mcp__<server>__<tool>
+      if (name.startsWith("mcp__")) {
+        result = await callStdioMcpTool(name, args);
+      } else if (name.startsWith("figma_")) {
         result = await executeFigmaTool(name, args);
       } else if (name.startsWith("github_") || name.startsWith("slack_") || name.startsWith("notion_")) {
         result = `${c.yellow}MCP tool not yet implemented:${c.reset} ${name}. Run /mcp to see available integrations.`;
@@ -8932,6 +9279,10 @@ The user will NOT tell you which file to edit. You MUST find it yourself.
 - "Add logging" → Grep for existing log patterns, Glob for entry points → find where to add it
 - "Update the API" → Glob for *api*, *route* → read and identify the right file
 - NEVER ask "which file?" or "what file should I edit?"—USE Glob and Grep to discover it
+
+## FINDING CODE: semantic vs exact
+- When you don't know the exact symbol/string, use SemanticSearch (finds code by MEANING). For an exact token/regex, use Grep. If SemanticSearch says there's no index, run IndexProject once, then search again.
+- For unfamiliar errors, library docs, or current external info: WebSearch, then WebFetch the best link (both degrade gracefully offline). Delegate side-investigations to a Task sub-agent to keep your own context lean.
 
 ## GOLDEN RULE: USE REAL PATHS FROM SEARCH
 When Glob/Grep/List return file paths, use those EXACT paths in subsequent Read/Edit/Write calls.
@@ -9797,6 +10148,10 @@ async function chat(userInput: string): Promise<void> {
     /\b(yourself|edit the code|do it|implement it|edit the actual|go ahead|proceed)\b/i.test(userInput)
   );
 
+  // Connect any configured stdio MCP servers so their tools join this turn
+  // (idempotent + best-effort — a server that fails simply contributes nothing).
+  try { await ensureStdioMcpConnected(); } catch { /* offline-safe */ }
+
   while (continueLoop && iterations < maxIterations) {
     iterations++;
     const iterationStart = Date.now();
@@ -9830,8 +10185,8 @@ async function chat(userInput: string): Promise<void> {
               tool_calls: m.tool_calls,
               tool_call_id: m.tool_call_id,
             })),
-            // Filter tools based on current agent
-            tools: modelSupportsTools(CONFIG.model) ? filterToolsForAgent(CLI_TOOLS) : undefined,
+            // Filter tools based on current agent, plus any connected MCP tools
+            tools: modelSupportsTools(CONFIG.model) ? [...filterToolsForAgent(CLI_TOOLS), ...stdioMcpToolSchemas()] : undefined,
             stream: true,
             instance_id: cliInstanceId,
             project_root: process.cwd(),
@@ -11837,30 +12192,66 @@ Be specific and reference line numbers when possible. Keep feedback actionable.`
             }
 
             if (subCommand === "disable") {
-              const serverType = args[1];
-              const server = mcpConfig.servers.find(s => s.type === serverType);
+              const key = args[1];
+              const server = mcpConfig.servers.find(s => s.name === key || s.type === key);
               if (server) {
                 server.enabled = false;
                 saveMCPConfig(mcpConfig);
-                console.log(`${c.green}✓${c.reset} ${serverType} disabled`);
+                const conn = stdioMcpConns.get(server.name);
+                if (conn) { try { conn.proc.kill(); } catch {} stdioMcpConns.delete(server.name); }
+                console.log(`${c.green}✓${c.reset} ${key} disabled`);
               }
               break;
             }
 
             if (subCommand === "enable") {
-              const serverType = args[1];
-              const server = mcpConfig.servers.find(s => s.type === serverType);
+              const key = args[1];
+              const server = mcpConfig.servers.find(s => s.name === key || s.type === key);
               if (server) {
                 server.enabled = true;
                 saveMCPConfig(mcpConfig);
-                console.log(`${c.green}✓${c.reset} ${serverType} enabled`);
+                console.log(`${c.green}✓${c.reset} ${key} enabled`);
               } else {
-                console.log(`${c.yellow}Run /mcp setup ${serverType} first${c.reset}`);
+                console.log(`${c.yellow}Run /mcp setup ${key} first${c.reset}`);
               }
               break;
             }
 
-            // Show MCP status
+            // Add a generic stdio MCP server: /mcp add <name> <command> [args...]
+            if (subCommand === "add") {
+              const name = args[1];
+              const command = args[2];
+              if (!name || !command) {
+                console.log(`${c.dim}Usage: /mcp add <name> <command> [args...]${c.reset}`);
+                console.log(`${c.dim}e.g.  /mcp add fs npx -y @modelcontextprotocol/server-filesystem ${process.cwd()}${c.reset}`);
+                break;
+              }
+              const cmdArgs = args.slice(3);
+              const existing = mcpConfig.servers.find(s => s.name === name);
+              if (existing) { existing.type = "stdio"; existing.enabled = true; existing.command = command; existing.args = cmdArgs; }
+              else mcpConfig.servers.push({ name, type: "stdio", enabled: true, command, args: cmdArgs });
+              saveMCPConfig(mcpConfig);
+              console.log(`${c.green}✓${c.reset} Added stdio MCP server "${name}". Connecting…`);
+              await ensureStdioMcpConnected();
+              const conn = stdioMcpConns.get(name);
+              if (conn?.ready) console.log(`${c.green}●${c.reset} connected · ${conn.tools.length} tools (mcp__${name}__*)`);
+              else console.log(`${c.red}✗${c.reset} failed${conn?.error ? `: ${conn.error}` : ""}`);
+              break;
+            }
+
+            if (subCommand === "remove" || subCommand === "rm") {
+              const name = args[1];
+              const before = mcpConfig.servers.length;
+              mcpConfig.servers = mcpConfig.servers.filter(s => s.name !== name);
+              saveMCPConfig(mcpConfig);
+              const conn = stdioMcpConns.get(name);
+              if (conn) { try { conn.proc.kill(); } catch {} stdioMcpConns.delete(name); }
+              console.log(mcpConfig.servers.length < before ? `${c.green}✓${c.reset} Removed "${name}"` : `${c.yellow}No server "${name}"${c.reset}`);
+              break;
+            }
+
+            // Show MCP status (connect stdio servers so we can show tool counts)
+            try { await ensureStdioMcpConnected(); } catch {}
             const enabledServers = getEnabledMCPServers();
 
             console.log(`\n${c.bold}${c.purple}MCP Connections${c.reset}\n`);
@@ -11869,7 +12260,12 @@ Be specific and reference line numbers when possible. Keep feedback actionable.`
               console.log(`  ${c.dim}No servers connected${c.reset}\n`);
             } else {
               for (const server of enabledServers) {
-                console.log(`  ${c.green}●${c.reset} ${server.name} ${c.dim}(${server.type})${c.reset}`);
+                const conn = server.type === "stdio" ? stdioMcpConns.get(server.name) : undefined;
+                const detail = server.type === "stdio"
+                  ? (conn?.ready ? ` ${c.dim}· ${conn.tools.length} tools${c.reset}` : conn?.error ? ` ${c.red}· ${conn.error}${c.reset}` : ` ${c.dim}· not connected${c.reset}`)
+                  : "";
+                const dot = server.type === "stdio" && !conn?.ready ? c.red : c.green;
+                console.log(`  ${dot}●${c.reset} ${server.name} ${c.dim}(${server.type})${c.reset}${detail}`);
               }
               console.log();
             }
@@ -11881,10 +12277,12 @@ Be specific and reference line numbers when possible. Keep feedback actionable.`
             console.log(`  ${c.dim}notion${c.reset}  - Pages, databases (coming soon)`);
 
             console.log(`\n${c.bold}Commands${c.reset}`);
-            console.log(`  /mcp setup <service>   Connect a service`);
-            console.log(`  /mcp enable <service>  Enable a service`);
-            console.log(`  /mcp disable <service> Disable a service`);
-            console.log(`  /figma                 Figma commands\n`);
+            console.log(`  /mcp add <name> <cmd> [args...]  Add a stdio MCP server`);
+            console.log(`  /mcp remove <name>               Remove a server`);
+            console.log(`  /mcp setup <service>             Connect a built-in service`);
+            console.log(`  /mcp enable|disable <name>       Toggle a server`);
+            console.log(`  /figma                           Figma commands`);
+            console.log(`\n${c.dim}Stdio tools appear to the model as mcp__<name>__<tool>.${c.reset}\n`);
           }
           break;
 
