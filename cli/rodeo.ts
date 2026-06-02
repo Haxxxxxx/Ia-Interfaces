@@ -3746,6 +3746,96 @@ function getFullProjectContext(): string {
   return parts.join("\n");
 }
 
+/**
+ * Deterministically generate a COMPACT .rodeo/memory.md from a filesystem scan
+ * — no LLM, so it's always accurate and small enough to fit the local model's
+ * context. Powers `rodeo onboard` / `/onboard`: run it in any project and Rodeo
+ * knows it on launch.
+ */
+function generateProjectMemoryMarkdown(): string {
+  const cwd = process.cwd();
+  const name = path.basename(cwd);
+  const proj = detectProject();
+  const typeStr = proj.framework ? `${proj.type} (${proj.framework})` : proj.type;
+
+  let desc = "", pkgName = "";
+  let scripts: string[] = [];
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf-8"));
+    pkgName = pkg.name || "";
+    desc = pkg.description || "";
+    scripts = Object.keys(pkg.scripts || {});
+  } catch {}
+
+  const IGNORE = new Set(["node_modules", ".git", ".next", ".venv", "venv", "dist", "build", "target", "__pycache__", ".cache", ".turbo", "coverage", ".idea", ".vscode", ".expo"]);
+  const dirs: string[] = [], files: string[] = [];
+  try {
+    for (const e of fs.readdirSync(cwd, { withFileTypes: true })) {
+      if (e.name.startsWith(".") && e.name !== ".rodeo") continue;
+      if (IGNORE.has(e.name)) continue;
+      if (e.isDirectory()) dirs.push(e.name + "/"); else files.push(e.name);
+    }
+  } catch {}
+  dirs.sort(); files.sort();
+
+  const srcHints = ["src", "src/app", "src/components", "src/lib", "app", "lib", "components", "pages", "api", "server", "modules"]
+    .filter((p) => fs.existsSync(path.join(cwd, p))).map((p) => p + "/");
+
+  let branch = "", remote = "";
+  try { branch = execSync("git rev-parse --abbrev-ref HEAD 2>/dev/null", { cwd, encoding: "utf-8" }).trim(); } catch {}
+  try { remote = execSync("git remote get-url origin 2>/dev/null", { cwd, encoding: "utf-8" }).trim(); } catch {}
+
+  const runCmds: string[] = [];
+  if (scripts.includes("dev")) runCmds.push("npm run dev");
+  if (scripts.includes("build")) runCmds.push("npm run build");
+  if (scripts.includes("test")) runCmds.push("npm test");
+  if (proj.testRunner && !runCmds.some((c) => c.includes("test"))) runCmds.push(proj.testRunner);
+
+  const notableFiles = files.filter((f) => /\.(ts|tsx|js|jsx|mjs|py|rs|go|toml|json|md|sql)$/i.test(f)).slice(0, 16);
+
+  const L: string[] = [];
+  L.push("# Rodeo Project Knowledge");
+  L.push("## Overview");
+  L.push(`${name}${pkgName && pkgName !== name ? ` (package \`${pkgName}\`)` : ""} — ${desc || `${typeStr} project.`}`.trim());
+  L.push("## Stack");
+  L.push(`- Type: ${typeStr}${proj.features?.length ? ` · ${proj.features.join(", ")}` : ""}${proj.buildTool ? ` · build: ${proj.buildTool}` : ""}`);
+  L.push("## Structure");
+  if (srcHints.length) L.push(`- Source dirs: ${srcHints.join(", ")}`);
+  if (dirs.length) L.push(`- Top-level dirs: ${dirs.slice(0, 20).join(" ")}`);
+  if (notableFiles.length) L.push(`- Notable files: ${notableFiles.join(" ")}`);
+  if (runCmds.length || scripts.length) {
+    L.push("## Build / run / test");
+    runCmds.forEach((c2) => L.push(`- ${c2}`));
+    if (scripts.length) L.push(`- npm scripts: ${scripts.slice(0, 12).join(", ")}`);
+  }
+  if (branch || remote) {
+    L.push("## Git");
+    if (branch) L.push(`- Branch: ${branch}`);
+    if (remote) L.push(`- Remote: ${remote}`);
+  }
+  L.push("## Conventions & gotchas");
+  L.push("- (Auto-generated baseline. Add the non-obvious bits a scan can't infer; Rodeo also appends here via RememberProject.)");
+  return L.join("\n") + "\n";
+}
+
+/** Write .rodeo/memory.md for the current project (won't clobber unless force). */
+function onboardProject(force: boolean): string {
+  const cwd = process.cwd();
+  const memPath = path.join(cwd, ".rodeo", "memory.md");
+  if (fs.existsSync(memPath) && !force) {
+    return `${c.yellow}.rodeo/memory.md already exists${c.reset} for ${path.basename(cwd)} — not overwriting.\n${c.dim}Regenerate with ${c.cyan}rodeo onboard --force${c.reset}${c.dim} (or ${c.cyan}/onboard force${c.reset}).${c.reset}`;
+  }
+  try {
+    const md = generateProjectMemoryMarkdown();
+    fs.mkdirSync(path.join(cwd, ".rodeo"), { recursive: true });
+    fs.writeFileSync(memPath, md, "utf-8");
+    cachedProjectContext = null; // invalidate so the new memory loads immediately
+    return `${c.green}✓${c.reset} Wrote ${c.cyan}.rodeo/memory.md${c.reset} (${md.length} bytes). Rodeo now knows ${c.bold}${path.basename(cwd)}${c.reset} on launch.\n${c.dim}Edit it to add the non-obvious bits a scan can't infer.${c.reset}`;
+  } catch (e: any) {
+    return `${c.red}Error:${c.reset} ${e.message}`;
+  }
+}
+
 // ============================================
 // CONVERSATION SAVE/LOAD
 // ============================================
@@ -10668,6 +10758,14 @@ ${c.bold}In Session:${c.reset}
     return true;
   }
 
+  // `rodeo onboard [--force]` — scan the current project and write a compact
+  // .rodeo/memory.md so Rodeo knows it on launch. One-shot; great for batch
+  // seeding across many repos.
+  if (args[0] === "onboard") {
+    console.log(onboardProject(args.includes("--force") || args.includes("-f")));
+    return true;
+  }
+
   // Handle --new <name> for named sessions
   const newIdx = args.indexOf("--new");
   if (newIdx !== -1 && args[newIdx + 1]) {
@@ -11359,6 +11457,10 @@ ${c.dim}└${c.reset} ${c.bold}Path${c.reset}      ${c.dim}${truncate(process.cw
             }
             console.log(`\n${c.dim}Start new: RODEO_SESSION_NAME=name npx tsx rodeo.ts${c.reset}\n`);
           }
+          break;
+
+        case "onboard":
+          console.log(onboardProject(args[0] === "force" || args[0] === "--force"));
           break;
 
         case "memory":
