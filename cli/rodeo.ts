@@ -1182,8 +1182,9 @@ async function fetchWithRetry(
     } catch (error: any) {
       lastError = error;
 
-      // Don't retry on abort
-      if (error.name === "AbortError") {
+      // Don't retry on abort (user ^C) or timeout — retrying a timeout just
+      // repeats the same long wait. AbortSignal.timeout() throws TimeoutError.
+      if (error.name === "AbortError" || error.name === "TimeoutError") {
         throw error;
       }
 
@@ -6604,6 +6605,15 @@ function listDir(dirPath: string): string {
 
     return result.join("\n");
   } catch (error: any) {
+    if (error.code === "ENOENT") {
+      // Nudge recovery: a weak model often guesses a top-level path (e.g.
+      // "src/components") when the target is nested under a subdirectory it
+      // already saw at the root. Tell it to look, don't just report failure.
+      const leaf = dirPath.replace(/\/+$/, "").split("/").pop() || dirPath;
+      return `${c.yellow}Not found:${c.reset} ${dirPath}\n` +
+        `It may be nested under a subdirectory. Use Glob "**/${leaf}/**" to locate it, ` +
+        `or List the parent directories you already saw (e.g. List the subfolders from the previous List output) before assuming a path.`;
+    }
     return `${c.red}Error listing ${dirPath}:${c.reset} ${error.message}`;
   }
 }
@@ -7775,9 +7785,12 @@ async function runSubAgent(
             max_tokens: 2048,
             ...(CONFIG.local ? { keep_alive: "30m" } : {}),
           }),
-          signal: AbortSignal.timeout(30000), // 30s timeout per iteration
+          // Non-streaming: the WHOLE completion must finish before we get bytes
+          // back, so a cold-loaded local model needs the full budget — not less
+          // than the streaming main loop. 30s was far too short for a 14b.
+          signal: AbortSignal.timeout(Math.max(CONFIG.timeout, 120000)),
         },
-        { maxRetries: 2, baseDelayMs: 500 }
+        { maxRetries: 1, baseDelayMs: 500 }
       );
 
       if (!response.ok) {
