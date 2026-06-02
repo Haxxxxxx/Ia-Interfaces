@@ -5938,6 +5938,24 @@ function getLangFromPath(filePath: string): string {
 }
 
 // Edit file - replace old_string with new_string (Claude Code style)
+/** Return the Python syntax error for a code string, or null if it parses.
+ *  Uses `ast.parse` over stdin (no temp files). Returns null if python3 is
+ *  unavailable so we never block edits when Python isn't installed. */
+function pythonSyntaxError(code: string): string | null {
+  try {
+    execSync('python3 -c "import sys,ast; ast.parse(sys.stdin.read())"', {
+      input: code,
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 8000,
+    });
+    return null;
+  } catch (e: any) {
+    const out = `${e.stderr?.toString() || ""}${e.stdout?.toString() || ""}`.trim();
+    if (!out || /not found|No such file|ENOENT/i.test(out)) return null; // python3 missing → don't block
+    return out.split("\n").filter(Boolean).slice(-3).join("\n");
+  }
+}
+
 function editFile(filePath: string, oldString: string, newString: string, replaceAll: boolean = false): string {
   try {
     const fullPath = path.resolve(process.cwd(), filePath);
@@ -5975,6 +5993,30 @@ function editFile(filePath: string, oldString: string, newString: string, replac
             console.log(`${c.dim}↳ Auto-fixed trailing whitespace${c.reset}`);
             break;
           }
+        }
+      }
+    }
+
+    // Last-resort match: compare by fully-trimmed line content, tolerating
+    // indentation differences AND line-number prefixes the model copied from
+    // Read output (e.g. "│  8     code", "8→code", "8  code"). We match loosely
+    // but REPLACE the file's real text; if the model's new_string has bad
+    // indentation, the Python syntax guard below reverts it with a clear error.
+    if (occurrences === 0) {
+      const stripLN = (l: string) => l.replace(/^\s*│?\s*\d+\s*(?:[│|:→>]|\s{2,}|\t)\s*/, "");
+      const norm = (arr: string[]) => arr.map((l) => stripLN(l).trim()).join("\n");
+      const lines = content.split("\n");
+      const oldLines = oldString.split("\n");
+      const target = norm(oldLines);
+      if (target.trim()) {
+        let matches = 0, matchIdx = -1;
+        for (let i = 0; i <= lines.length - oldLines.length; i++) {
+          if (norm(lines.slice(i, i + oldLines.length)) === target) { matches++; matchIdx = i; }
+        }
+        if (matches === 1 || (matches > 1 && replaceAll)) {
+          actualOldString = lines.slice(matchIdx, matchIdx + oldLines.length).join("\n");
+          occurrences = matches;
+          console.log(`${c.dim}↳ Matched ignoring indentation / line-number prefixes${c.reset}`);
         }
       }
     }
@@ -6048,6 +6090,20 @@ function editFile(filePath: string, oldString: string, newString: string, replac
       : content.replace(actualOldString, newString);
 
     fs.writeFileSync(fullPath, newContent, "utf-8");
+
+    // Python is indentation-sensitive and a small local model frequently emits
+    // invalid indentation on a multi-line edit. If THIS edit introduced a syntax
+    // error (the original parsed, the result doesn't), revert it and hand back a
+    // precise error — so the file is never left broken and the model gets an
+    // actionable signal instead of looping on a corrupted file.
+    if (path.extname(fullPath).toLowerCase() === ".py") {
+      const newErr = pythonSyntaxError(newContent);
+      if (newErr && !pythonSyntaxError(content)) {
+        fs.writeFileSync(fullPath, content, "utf-8"); // revert
+        return `${c.red}Edit reverted${c.reset} — it introduced a Python syntax error, so ${path.basename(fullPath)} was left UNCHANGED:\n${c.dim}${newErr}${c.reset}\n\n` +
+          `${c.yellow}Fix:${c.reset} Read the file again and resend the edit with CORRECT, consistent indentation. Python uses spaces: the function body is indented 4 spaces, a nested block (inside if/for/def) 8 spaces. Send the whole corrected block as new_string.`;
+      }
+    }
 
     // Generate diff display with context from original content (with syntax highlighting)
     const diff = generateDiff(oldString, newString, lineNumber, content, lang);
