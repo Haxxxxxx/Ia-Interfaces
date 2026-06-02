@@ -9162,36 +9162,38 @@ function buildSpeedPrompt(): string {
   const cwd = process.cwd();
   const project = detectProject();
   const projectInfo = project.framework ? `${project.type} (${project.framework})` : project.type;
+  // KEEP the project memory/context — it's the whole point of "knowing the
+  // project". This compact prompt is ~1k tokens vs the full ~7.4k, so the
+  // memory + tools actually FIT in the model's context instead of being
+  // truncated (which made the model hallucinate what the project even was).
+  const projectCtx = getFullProjectContext();
 
-  return `You are Rodeo, an expert coding assistant. Be direct and efficient.
+  return `You are Rodeo, an offline AI coding agent. You DO the work with tools — never just explain or paste a code block as your answer; emit the matching tool call (Edit / Write / MultiEdit / Bash / Read / Glob / Grep / List / SemanticSearch / WebSearch / Task).
 
 Working directory: ${cwd}
-Project: ${projectInfo}
-${project.testRunner ? `Tests: ${project.testRunner}` : ""}
+Project: ${projectInfo}${project.testRunner ? `\nTests: ${project.testRunner}` : ""}
 
-RESPONSE STYLE:
-- Be concise. No filler words.
-- Show code, not explanations unless asked.
-- Use tools immediately when needed.
-- One task at a time.
+## How you work
+- Find files yourself — the user won't give paths. Glob/Grep for an exact token; SemanticSearch for code by MEANING (run IndexProject once if there's no index).
+- Read a file before you Edit it. Match old_string EXACTLY (never include line-number prefixes like "5→"). On a failed edit, re-read and retry.
+- One task at a time. After a tool returns, USE its result for the next real step — don't fire an unrelated tool.
+- After changing code, verify (typecheck / tests / build) and fix what you broke. Be concise: act, then briefly say what you did.
 
-TOOLS: Read, Edit, Write, Bash, Glob, Grep, List
-
-FILE DISCOVERY: User will NOT specify files. Find them: Glob/Grep first, then Read/Edit.
-Glob: Use **/*.{ts,tsx} for TS/React projects, not just *.ts
-EDIT WORKFLOW:
-1. Glob/Grep to find the file (required before edit)
-2. Read file (required before edit)
-3. Match old_string EXACTLY (no line numbers like "5→")
-4. On error: re-read, retry with fresh content
-
-ACT FIRST, then briefly explain what you did.`;
+## Honesty & limits (you are a LOCAL model, offline)
+- NEVER invent work the user didn't ask for, and NEVER call a tool with a made-up argument or id.
+- If a request is too broad or vague to do well in one pass, DON'T guess — use AskUser to offer 2-4 concrete options (narrow to one file/step, plan first, or split it).
+- Be honest when a task is beyond what you can do reliably offline; say so and propose the most accurate next step rather than a confident low-quality attempt.
+${projectCtx ? `\n## Project knowledge — trust this, it describes THIS codebase\n${projectCtx}` : ""}`;
 }
 
 // Build dynamic system prompt with project context
 function buildSystemPrompt(): string {
-  // Use compact prompt in speed mode
-  if (CONFIG.speedMode) {
+  // Use the compact prompt for LOCAL mode (and speed mode). A 14b drowns in
+  // the full ~7.4k-token prompt and — worse — it pushes the project memory and
+  // tools past num_ctx, so they get truncated. The compact prompt keeps the
+  // memory + key rules and leaves room for tools + a real conversation. The
+  // full prompt is reserved for the hosted/remote (frontier) models.
+  if (CONFIG.speedMode || CONFIG.local) {
     return buildSpeedPrompt();
   }
 
@@ -9934,13 +9936,12 @@ function wrappedRowCount(text: string, width: number): number {
 // NATIVE /api/chat endpoint honors num_ctx, so in local mode we talk to it and
 // translate to/from the OpenAI shapes the rest of the loop already uses.
 // ============================================================================
-// 8192 (not higher) by default: a larger num_ctx means a bigger KV cache AND
-// slower cold prompt-eval — on a cold 14b, num_ctx 16384 + a big system prompt
-// took >120s just to return the first byte and tripped the request timeout.
-// 8192 still doubles the OpenAI-endpoint's 4096 cap so history is retained,
-// while keeping the first turn responsive. Power users can raise RODEO_NUM_CTX
-// (and RODEO_TIMEOUT alongside it).
-const NUM_CTX = parseInt(process.env.RODEO_NUM_CTX || "") || 8192;
+// 12288: with the COMPACT local prompt (~1k tokens), system prompt + tools
+// (~5k) + project memory (~1k) fit comfortably with ~5k left for the
+// conversation — without the memory truncation we saw at 8192 or the
+// memory-pressure/slow cold-eval we saw at 16384 on a 14b. warmModel()
+// pre-allocates the KV at this size so the first turn isn't a cold realloc.
+const NUM_CTX = parseInt(process.env.RODEO_NUM_CTX || "") || 12288;
 
 function nativeChatUrl(): string {
   const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
@@ -10878,10 +10879,13 @@ function printStartupTip(): void {
 // pure optimization and must never block or crash startup.
 function warmModel(): void {
   const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
+  // Pre-allocate the KV cache at the SAME num_ctx the real turns use, so the
+  // first turn doesn't pay a cold KV-reallocation (which previously blew the
+  // request timeout). options.num_ctx is honored on /api/generate.
   fetch(`${base}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: CONFIG.model, prompt: "", keep_alive: "30m" }),
+    body: JSON.stringify({ model: CONFIG.model, prompt: "", keep_alive: "30m", options: { num_ctx: NUM_CTX } }),
   }).catch(() => {});
 }
 
