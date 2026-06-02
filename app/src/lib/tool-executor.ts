@@ -770,11 +770,43 @@ async function executeTask(
   }
 }
 
+/** Build/rebuild the semantic index for the project sandbox. */
+async function executeIndexProject(ctx: ToolExecutionContext): Promise<ToolResult> {
+  try {
+    const { buildSemanticIndex } = await import("./semantic-search");
+    return { success: true, output: await buildSemanticIndex(ctx.projectRoot) };
+  } catch (err: any) {
+    return { success: false, output: "", error: `IndexProject failed: ${err.message}` };
+  }
+}
+
+/** Find code by meaning over the semantic index. */
+async function executeSemanticSearch(args: { query: string; k?: number }, ctx: ToolExecutionContext): Promise<ToolResult> {
+  if (!args.query?.trim()) return { success: false, output: "", error: "query is required" };
+  try {
+    const { semanticSearch } = await import("./semantic-search");
+    return { success: true, output: await semanticSearch(ctx.projectRoot, args.query, Number(args.k) || 6) };
+  } catch (err: any) {
+    return { success: false, output: "", error: `SemanticSearch failed: ${err.message}` };
+  }
+}
+
+/** Route a generic stdio MCP tool call (mcp__<server>__<tool>). */
+async function executeMcp(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  try {
+    const { callMcpTool } = await import("./mcp-client");
+    const out = await callMcpTool(name, args);
+    return { success: !out.startsWith("Error"), output: out };
+  } catch (err: any) {
+    return { success: false, output: "", error: `MCP call failed: ${err.message}` };
+  }
+}
+
 // ============================================================================
 // Main Executor
 // ============================================================================
 
-export type ToolName = "Read" | "Edit" | "Write" | "MultiEdit" | "Bash" | "Glob" | "Grep" | "List" | "WebSearch" | "Task";
+export type ToolName = "Read" | "Edit" | "Write" | "MultiEdit" | "Bash" | "Glob" | "Grep" | "List" | "WebSearch" | "Task" | "SemanticSearch" | "IndexProject";
 
 // Canonical tool names keyed by lowercase, so multi-word names survive.
 // Keyed by the name with all non-alphanumerics stripped + lowercased, so every
@@ -792,6 +824,8 @@ const CANONICAL_TOOLS: Record<string, string> = {
   list: "List", listdirectory: "List", ls: "List",
   websearch: "WebSearch", websearchtool: "WebSearch",
   task: "Task", spawntask: "Task",
+  semanticsearch: "SemanticSearch", semantic: "SemanticSearch",
+  indexproject: "IndexProject", reindex: "IndexProject",
 };
 const canonicalKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -850,11 +884,21 @@ export async function executeTool(
     case "Task":
       return executeTask(args as { description: string; prompt: string; subagent_type: string }, ctx);
 
+    case "IndexProject":
+      return executeIndexProject(ctx);
+
+    case "SemanticSearch":
+      return executeSemanticSearch(args as { query: string; k?: number }, ctx);
+
     default:
+      // Generic stdio MCP tools: mcp__<server>__<tool>
+      if (typeof normalizedName === "string" && normalizedName.startsWith("mcp__")) {
+        return executeMcp(normalizedName, args);
+      }
       return {
         success: false,
         output: "",
-        error: `Unknown tool: ${name}. Available tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, List, WebSearch, Task`,
+        error: `Unknown tool: ${name}. Available tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, List, WebSearch, Task, SemanticSearch, IndexProject`,
       };
   }
 }

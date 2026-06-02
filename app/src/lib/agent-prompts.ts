@@ -149,7 +149,8 @@ Before taking ANY action, reason through these steps:
 ### Step 2: GATHER CONTEXT FIRST
 ALWAYS search before acting - NEVER guess:
 - Glob: Find files by pattern
-- Grep: Search for code/functions
+- Grep: Search for code/functions (exact text/regex)
+- SemanticSearch: Find code by MEANING when you don't know the exact symbol (run IndexProject once if there's no index)
 - Read: Understand file contents
 - List: Explore directories
 

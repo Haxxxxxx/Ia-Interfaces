@@ -9,6 +9,7 @@ import { getProjectMemory, formatMemoryForPrompt } from "@/lib/project-memory";
 import { getAgent, AGENTS } from "@/lib/agents";
 import { getModelById } from "@/lib/models";
 import { generateSystemPrompt } from "@/lib/agent-prompts";
+import { ensureMcpConnected, mcpToolSchemas } from "@/lib/mcp-client";
 import type OpenAI from "openai";
 
 export const runtime = "nodejs";
@@ -268,6 +269,16 @@ export async function POST(req: NextRequest) {
 
   // Filter tools based on agent permissions (unless client explicitly provides tools)
   let tools = clientTools || getToolsForAgent(agentName, TOOLS);
+
+  // Merge operator-configured stdio MCP server tools (full-access agents only;
+  // best-effort, offline-safe). Exposed to the model as mcp__<server>__<tool>.
+  if (!clientTools && (agentName === "build" || agentName === "general")) {
+    try {
+      await ensureMcpConnected();
+      const mcp = mcpToolSchemas();
+      if (mcp.length) tools = [...(tools || []), ...mcp];
+    } catch { /* offline-safe */ }
+  }
 
   // Capability gate: if we KNOW this model and it lacks tool calling (e.g. a
   // vision-only model with a 2048 context), don't run the agentic loop or ship

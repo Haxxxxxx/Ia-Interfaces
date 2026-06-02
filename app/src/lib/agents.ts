@@ -24,6 +24,8 @@ export interface AgentPermission {
   list?: ToolPermission;
   task?: ToolPermission;
   websearch?: ToolPermission;
+  semanticsearch?: ToolPermission;
+  indexproject?: ToolPermission;
 }
 
 export interface AgentInfo {
@@ -56,6 +58,8 @@ export const AGENTS: Record<string, AgentInfo> = {
       list: "allow",
       task: "allow",
       websearch: "allow",
+      semanticsearch: "allow",
+      indexproject: "allow",
     },
   },
 
@@ -73,6 +77,8 @@ export const AGENTS: Record<string, AgentInfo> = {
       list: "allow",
       task: "deny",
       websearch: "allow",
+      semanticsearch: "allow",
+      indexproject: "deny",
     },
   },
 
@@ -90,6 +96,8 @@ export const AGENTS: Record<string, AgentInfo> = {
       list: "allow",
       task: "deny",
       websearch: "deny",
+      semanticsearch: "allow",
+      indexproject: "deny",
     },
   },
 
@@ -107,6 +115,8 @@ export const AGENTS: Record<string, AgentInfo> = {
       list: "allow",
       task: "allow",
       websearch: "allow",
+      semanticsearch: "allow",
+      indexproject: "allow",
     },
   },
 };
@@ -183,7 +193,7 @@ export function getToolNamesForAgent(agentName: string): string[] {
   const agent = getAgent(agentName);
   if (!agent) return [];
 
-  const allToolNames = ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch"];
+  const allToolNames = ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "List", "Task", "WebSearch", "SemanticSearch", "IndexProject"];
 
   return allToolNames.filter((toolName) => isToolAllowed(agentName, toolName));
 }

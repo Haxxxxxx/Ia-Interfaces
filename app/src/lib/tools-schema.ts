@@ -321,6 +321,29 @@ When NOT to use:
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "IndexProject",
+      description: "Build (or rebuild) the semantic code index for this project so SemanticSearch works. Run once per project, or after large changes. Needs the local embedding model (nomic-embed-text); it tells you how to install it if missing.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "SemanticSearch",
+      description: "Find code by MEANING, not exact text — describe what you want in natural language (e.g. \"where tool calls are approved\" or \"the retry/backoff logic\"). Returns the most relevant file ranges. Prefer this over Grep when you don't know the exact symbol. Needs an index (run IndexProject first).",
+      parameters: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string", description: "Natural-language description of the code you want" },
+          k: { type: "number", description: "How many results (default 6, max 12)" },
+        },
+      },
+    },
+  },
 ];
 
 // Mapping from Claude Code-style tool names to CLI tool names for compatibility
@@ -334,6 +357,8 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   List: "list_directory",
   WebSearch: "web_search",
   Task: "spawn_task",
+  SemanticSearch: "semantic_search",
+  IndexProject: "index_project",
   // Also support lowercase versions
   read: "read_file",
   edit: "edit_file",
@@ -344,4 +369,6 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   list: "list_directory",
   websearch: "web_search",
   task: "spawn_task",
+  semanticsearch: "semantic_search",
+  indexproject: "index_project",
 };
