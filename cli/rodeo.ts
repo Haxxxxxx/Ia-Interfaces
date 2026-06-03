@@ -3818,6 +3818,118 @@ function generateProjectMemoryMarkdown(): string {
   return L.join("\n") + "\n";
 }
 
+/** Deterministic offline-health check — verifies everything Rodeo needs to work
+ *  well locally and prints actionable fixes. No LLM. */
+async function doctor(): Promise<void> {
+  const ok = (s: string) => `  ${c.green}✓${c.reset} ${s}`;
+  const bad = (s: string) => `  ${c.red}✗${c.reset} ${s}`;
+  const warn = (s: string) => `  ${c.yellow}⚠${c.reset} ${s}`;
+  const have = (cmd: string) => { try { execSync(`command -v ${cmd}`, { stdio: "pipe" }); return true; } catch { return false; } };
+  const base = (CONFIG.ollamaUrl || "http://localhost:11434").replace(/\/+$/, "");
+
+  console.log(`\n${c.bold}${c.purple}Rodeo doctor${c.reset} ${c.dim}(${CONFIG.local ? "local/offline" : "remote: " + CONFIG.apiUrl})${c.reset}\n`);
+
+  // Ollama + models
+  let models: string[] = [];
+  let ollamaUp = false;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${base}/api/tags`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (res.ok) { ollamaUp = true; const d: any = await res.json(); models = (d.models || []).map((m: any) => m.name); }
+  } catch {}
+  console.log(ollamaUp ? ok(`Ollama reachable at ${base} — ${models.length} models`) : bad(`Ollama not reachable at ${base} — start it: ${c.cyan}ollama serve${c.reset}`));
+
+  // Current model present + tool-capable
+  if (ollamaUp) {
+    const cur = CONFIG.model;
+    const present = models.some((m) => m === cur || m.split(":")[0] === cur.split(":")[0]);
+    console.log(present ? ok(`Active model: ${cur}`) : bad(`Active model "${cur}" not installed — ${c.cyan}ollama pull ${cur}${c.reset}`));
+    console.log(modelSupportsTools(cur) ? ok(`"${cur}" supports tool-calling`) : warn(`"${cur}" may not tool-call well (avoid -coder for the agent loop)`));
+    // Embedding model for SemanticSearch
+    const embed = models.some((m) => m.startsWith("nomic-embed-text"));
+    console.log(embed ? ok(`Embedding model present (SemanticSearch ready)`) : warn(`No embedding model — SemanticSearch/IndexProject need: ${c.cyan}ollama pull nomic-embed-text${c.reset}`));
+  }
+
+  // Context config
+  console.log(ok(`num_ctx: ${NUM_CTX}${NUM_CTX < 8192 ? c.yellow + " (low — memory may truncate)" + c.reset : ""}`));
+
+  // Tooling
+  console.log(have("rg") ? ok("ripgrep installed (fast search + indexing)") : warn(`ripgrep missing (falls back to find/grep, slower) — ${c.cyan}brew install ripgrep${c.reset}`));
+  console.log(have("git") ? ok("git installed") : bad("git not found"));
+  console.log(have("python3") ? ok("python3 (Python edit syntax-guard active)") : warn("python3 not found — Python edits won't be syntax-checked"));
+  console.log(have("node") ? ok(`node ${process.version}`) : bad("node not found"));
+
+  // Repo + memory context
+  const st = getGitStatus();
+  console.log(st.isRepo ? ok(`Git repo (branch ${st.branch})`) : warn("Not a git repo — /commit, /explain, /review need git"));
+  const memPath = path.join(process.cwd(), ".rodeo", "memory.md");
+  console.log(fs.existsSync(memPath) ? ok(".rodeo/memory.md present (project-aware)") : warn(`No project memory here — run ${c.cyan}rodeo onboard${c.reset} to generate it`));
+
+  // RAM vs model fit
+  try {
+    const ramBytes = parseInt(execSync("sysctl -n hw.memsize 2>/dev/null", { encoding: "utf-8" }).trim()) || 0;
+    if (ramBytes) {
+      const ramGB = Math.round(ramBytes / 1e9);
+      console.log(ok(`System RAM: ${ramGB}GB${ramGB < 16 ? c.yellow + " (tight for 14b)" + c.reset : ""}`));
+    }
+  } catch {}
+  console.log();
+}
+
+/**
+ * Plan → handoff: draft a precise implementation plan for a task and save it as
+ * a portable artifact (.rodeo/handoff/<ts>.md). Leverages the local model's
+ * planning strength and dodges its weak spot (precise edits) — you review the
+ * plan, then apply it yourself, feed it back to Rodeo to execute, or hand the
+ * file to a stronger model when you're back online. The "both days" bridge.
+ */
+async function handoffPlan(task: string): Promise<void> {
+  if (!task.trim()) { console.log(`${c.dim}Usage: /handoff <what you want to build/change>${c.reset}`); return; }
+  const ctx = getFullProjectContext(); // project memory + structure (from onboard)
+  console.log(`\n${c.bold}Drafting plan${c.reset} ${c.dim}for: ${task}${c.reset}`);
+  startSpinner("planning");
+  let plan = "";
+  try {
+    plan = await llmComplete(
+`You are drafting an implementation plan for a coding task in THIS project. Use the context to reference real paths. Output GitHub-flavored markdown with exactly these sections:
+## Approach (2-3 sentences)
+## Files to change (bullet list: \`path\` — the specific change)
+## Steps (numbered, concrete, in order)
+## Verification (commands/tests to confirm it works)
+## Risks / watch-outs
+Be specific to this codebase. Do NOT write the full code — this is a plan to be applied later.
+
+PROJECT CONTEXT:
+${ctx.slice(0, 6000)}
+
+TASK: ${task}`, 1200);
+  } catch (e: any) {
+    stopSpinner();
+    console.log(`${c.red}Error:${c.reset} ${e.message}`);
+    return;
+  }
+  stopSpinner();
+  if (!plan.trim()) { console.log(`${c.yellow}Empty plan returned — try rephrasing the task.${c.reset}`); return; }
+
+  const slug = task.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "task";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const dir = path.join(process.cwd(), ".rodeo", "handoff");
+  const file = path.join(dir, `${stamp}-${slug}.md`);
+  const header = `# Handoff plan: ${task}\n\n_Drafted offline by Rodeo (${CONFIG.model}) on ${new Date().toISOString()}. Review before applying; this is a plan, not verified code._\n\n`;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, header + plan + "\n", "utf-8");
+  } catch (e: any) {
+    console.log(`${c.red}Couldn't save plan:${c.reset} ${e.message}`);
+  }
+  console.log();
+  console.log(formatMarkdown(plan));
+  console.log(`\n${c.green}✓${c.reset} Saved to ${c.cyan}${path.relative(process.cwd(), file)}${c.reset}`);
+  console.log(`${c.dim}Apply it yourself, run the steps, or hand this file to a stronger model when you're online.${c.reset}`);
+}
+
 /** Write .rodeo/memory.md for the current project (won't clobber unless force). */
 function onboardProject(force: boolean): string {
   const cwd = process.cwd();
@@ -11073,6 +11185,9 @@ async function main() {
   // Handle CLI arguments
   if (handleArgs()) return;
 
+  // Async one-shot commands (handleArgs is sync, so do these here)
+  if (process.argv.slice(2)[0] === "doctor") { await doctor(); return; }
+
   // Check for direct question
   const args = process.argv.slice(2);
   const directQuestion = args.join(" ").trim();
@@ -11487,6 +11602,15 @@ ${c.dim}└${c.reset} ${c.bold}Path${c.reset}      ${c.dim}${truncate(process.cw
 
         case "onboard":
           console.log(onboardProject(args[0] === "force" || args[0] === "--force"));
+          break;
+
+        case "doctor":
+          await doctor();
+          break;
+
+        case "handoff":
+        case "patch":
+          await handoffPlan(args.join(" "));
           break;
 
         case "memory":
