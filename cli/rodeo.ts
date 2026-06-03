@@ -10186,6 +10186,32 @@ function buildChatRequest(opts: {
   };
 }
 
+/** One-shot, non-streaming completion (no tools, no conversation history) — for
+ *  sidekick commands like /commit and /explain that embed their own context. */
+async function llmComplete(prompt: string, maxTokens = 600): Promise<string> {
+  const { url, body } = buildChatRequest({
+    messages: [{ role: "user", content: prompt } as any],
+    tools: undefined,
+    stream: false,
+    temperature: 0.2,
+    maxTokens,
+  });
+  const res = await fetchWithRetry(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${CONFIG.apiKey}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(Math.max(CONFIG.timeout, 120000)),
+    },
+    { maxRetries: 1 }
+  );
+  if (!res.ok) throw new Error(`model error ${res.status}`);
+  const data: any = await res.json();
+  const msg = CONFIG.local ? data.message : data.choices?.[0]?.message;
+  return (msg?.content || "").trim();
+}
+
 async function streamChat(response: Response): Promise<{ content: string; tool_calls: any[]; usage?: { prompt_tokens: number; completion_tokens: number } }> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error("No response body");
@@ -12078,6 +12104,47 @@ ${c.cyan}curl -fsSL https://ollama.com/install.sh | sh && sudo mkdir -p /etc/sys
           console.log(showGitDiff());
           break;
 
+        case "explain": {
+          // Plain-English summary of a diff. No arg = your working changes;
+          // <ref> = a commit (git show); <a>..<b> = a range (git diff).
+          const target = args[0];
+          let diff = "", label = "";
+          try {
+            if (target && target.includes("..")) {
+              diff = execSync(`git diff ${target}`, { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 });
+              label = `range ${target}`;
+            } else if (target) {
+              diff = execSync(`git show ${target}`, { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 });
+              label = `commit ${target}`;
+            } else {
+              const staged = execSync("git diff --cached", { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 });
+              const unstaged = execSync("git diff", { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 });
+              diff = `${staged}\n${unstaged}`;
+              label = "your working changes";
+            }
+          } catch (e: any) {
+            console.log(`${c.red}Error:${c.reset} ${e.message}`);
+            break;
+          }
+          if (!diff.trim()) { console.log(`${c.dim}Nothing to explain (no diff for ${label}).${c.reset}`); break; }
+          console.log(`\n${c.bold}Explaining ${label}${c.reset}\n`);
+          startSpinner("reading diff");
+          try {
+            const out = await llmComplete(
+`Explain this git diff in plain English for a developer reviewing it. Cover: (1) what changed, (2) the likely intent/why, (3) anything risky or worth double-checking. Be concise, use short bullets. No code fences.
+
+\`\`\`diff
+${diff.slice(0, 14000)}
+\`\`\``, 800);
+            stopSpinner();
+            console.log(formatMarkdown(out));
+          } catch (e: any) {
+            stopSpinner();
+            console.log(`${c.red}Error:${c.reset} ${e.message}`);
+          }
+          break;
+        }
+
         case "commit": {
           const commitStatus = getGitStatus();
           if (!commitStatus.isRepo) {
@@ -12094,25 +12161,57 @@ ${c.cyan}curl -fsSL https://ollama.com/install.sh | sh && sudo mkdir -p /etc/sys
               }
             } catch {}
           } else {
-            // Claude Code-style: Show staged changes and generate message
             console.log(`\n${c.purple}●${c.reset} ${c.bold}Generating commit message${c.reset}`);
+            let diffStat = "", diff = "";
+            try { diffStat = execSync("git diff --cached --stat", { encoding: "utf-8" }).trim(); } catch {}
+            try { diff = execSync("git diff --cached", { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 }); } catch {}
+            if (diffStat) console.log(`${c.dim}${diffStat}${c.reset}\n`);
+
+            // One-shot: embed the diff directly (no agentic loop, no tool calls).
+            startSpinner("writing message");
+            let msg = "";
             try {
-              const diffStat = execSync("git diff --cached --stat", { encoding: "utf-8" }).trim();
-              console.log(`${c.dim}${diffStat}${c.reset}\n`);
-            } catch {}
+              msg = await llmComplete(
+`Write a git commit message for these STAGED changes. Output ONLY the message, nothing else.
+Rules: Conventional Commits (feat/fix/docs/refactor/test/chore/perf/style); subject line imperative, under 72 chars; a short body explaining the WHY if non-trivial. No backticks, no preamble.
 
-            // Generate commit message using the model with safety instructions
-            await chat(`Generate a concise git commit message for the currently staged changes.
-Look at the diff with 'git diff --cached' and create a conventional commit message.
-Rules:
-- Use conventional commits format (feat:, fix:, docs:, refactor:, test:, chore:)
-- Focus on the "why" not just the "what"
-- Keep subject line under 72 chars
-- End the message with:
+\`\`\`diff
+${diff.slice(0, 12000)}
+\`\`\``);
+            } catch (e: any) {
+              stopSpinner();
+              console.log(`${c.red}Error generating message:${c.reset} ${e.message}`);
+              break;
+            }
+            stopSpinner();
+            // Strip any stray code fences / preamble lines the model adds.
+            msg = msg.replace(/^```[a-z]*\n?|\n?```$/g, "").trim();
+            if (!msg) { console.log(`${c.yellow}Model returned an empty message.${c.reset}`); break; }
 
-Co-Authored-By: Rodeo <noreply@rodeo.dev>
+            console.log(`${c.dim}Proposed commit message:${c.reset}\n`);
+            console.log(msg.split("\n").map((l) => `  ${c.green}${l}${c.reset}`).join("\n"));
+            console.log();
 
-Just output the commit message, nothing else.`);
+            const rl = globalRl;
+            if (!rl) { console.log(`${c.dim}Run \`git commit -m "..."\` to apply.${c.reset}`); break; }
+            waitingForUserInput = true;
+            try {
+              const ans = await new Promise<string>((resolve) => rl.question(`${c.cyan}Commit with this message? [Y/n/e(dit)]${c.reset} `, (a) => resolve(a.trim().toLowerCase())));
+              if (ans === "" || ans === "y" || ans === "yes") {
+                execSync("git commit -F -", { input: msg, encoding: "utf-8", stdio: ["pipe", "inherit", "inherit"] });
+                console.log(`${c.green}✓${c.reset} Committed.`);
+              } else if (ans === "e" || ans === "edit") {
+                const edited = await new Promise<string>((resolve) => rl.question(`${c.cyan}New subject line:${c.reset} `, (a) => resolve(a.trim())));
+                if (edited) { execSync("git commit -F -", { input: edited, encoding: "utf-8", stdio: ["pipe", "inherit", "inherit"] }); console.log(`${c.green}✓${c.reset} Committed.`); }
+                else console.log(`${c.dim}Cancelled.${c.reset}`);
+              } else {
+                console.log(`${c.dim}Cancelled — nothing committed.${c.reset}`);
+              }
+            } catch (e: any) {
+              console.log(`${c.red}Commit failed:${c.reset} ${e.message}`);
+            } finally {
+              waitingForUserInput = false;
+            }
           }
           break;
         }
