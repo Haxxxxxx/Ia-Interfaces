@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Rodeo",
+    "slug": "rodeo-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#0d0d0f"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "xyz.rodeo.mobile"
+    },
+    "android": {
+      "package": "xyz.rodeo.mobile"
+    }
+  }
+}
