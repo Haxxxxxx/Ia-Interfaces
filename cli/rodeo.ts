@@ -3818,6 +3818,63 @@ function generateProjectMemoryMarkdown(): string {
   return L.join("\n") + "\n";
 }
 
+/** Deterministic secret scan over tracked files (git grep). Flags committed
+ *  keys/tokens/private-key blocks + tracked .env files. No LLM. */
+function scanSecrets(): void {
+  const st = getGitStatus();
+  if (!st.isRepo) { console.log(`${c.dim}Not a git repo — secret scan works on tracked files.${c.reset}`); return; }
+  console.log(`\n${c.bold}${c.purple}Secret scan${c.reset} ${c.dim}(tracked files)${c.reset}\n`);
+  const patterns: [string, string][] = [
+    ["AWS access key", "AKIA[0-9A-Z]{16}"],
+    ["Private key block", "-----BEGIN [A-Z ]*PRIVATE KEY-----"],
+    ["GitHub token", "gh[pousr]_[A-Za-z0-9]{20,}"],
+    ["Slack token", "xox[baprs]-[A-Za-z0-9-]{10,}"],
+    ["Google API key", "AIza[0-9A-Za-z_-]{35}"],
+    ["OpenAI/Anthropic key", "sk-[A-Za-z0-9]{20,}"],
+    ["Hardcoded secret", "(api[_-]?key|secret|password|passwd|access[_-]?token|client[_-]?secret)['\"]?[[:space:]]*[:=][[:space:]]*['\"][^'\"]{8,}['\"]"],
+  ];
+  let total = 0;
+  for (const [label, pat] of patterns) {
+    try {
+      const out = execSync(`git grep -nIE ${JSON.stringify(pat)} -- . ':(exclude).rodeo/' 2>/dev/null`, { encoding: "utf-8", maxBuffer: 8 * 1024 * 1024 }).trim();
+      if (out) {
+        const lines = out.split("\n").slice(0, 8);
+        console.log(`${c.red}● ${label}${c.reset} (${out.split("\n").length})`);
+        lines.forEach((l) => console.log(`  ${c.dim}${l.slice(0, 120)}${c.reset}`));
+        total += out.split("\n").length;
+      }
+    } catch {}
+  }
+  // Tracked .env files (should usually be gitignored)
+  try {
+    const envs = execSync(`git ls-files | grep -E '(^|/)\\.env(\\.|$)' | grep -vE '\\.(example|sample|template|dist|md)$' || true`, { encoding: "utf-8" }).trim();
+    if (envs) { console.log(`${c.yellow}⚠ Tracked .env files (should be gitignored):${c.reset}`); envs.split("\n").forEach((f) => console.log(`  ${c.dim}${f}${c.reset}`)); total += envs.split("\n").length; }
+  } catch {}
+  console.log(total === 0 ? `${c.green}✓ No obvious secrets in tracked files.${c.reset}\n` : `\n${c.yellow}Review the above — rotate anything real and add to .gitignore / git-filter-repo.${c.reset}\n`);
+}
+
+/** Deterministic "what changed recently" digest + a one-line LLM summary. */
+async function standup(since: string): Promise<void> {
+  const st = getGitStatus();
+  if (!st.isRepo) { console.log(`${c.dim}Not a git repo.${c.reset}`); return; }
+  const window = since.trim() || "1 day ago";
+  let log = "", stat = "";
+  try { log = execSync(`git log --since=${JSON.stringify(window)} --pretty=format:'%h %s (%cr)' 2>/dev/null`, { encoding: "utf-8" }).trim(); } catch {}
+  try { stat = execSync(`git log --since=${JSON.stringify(window)} --shortstat --pretty=format:'' 2>/dev/null | awk '{f+=$1; i+=$4; d+=$6} END{if(NR)printf "%d files, +%d/-%d", f, i, d}'`, { encoding: "utf-8" }).trim(); } catch {}
+  console.log(`\n${c.bold}${c.purple}Since ${window}${c.reset}\n`);
+  if (!log) { console.log(`${c.dim}No commits in this window.${c.reset}\n`); return; }
+  log.split("\n").forEach((l) => { const [h, ...r] = l.split(" "); console.log(`  ${c.yellow}${h}${c.reset} ${r.join(" ")}`); });
+  if (stat) console.log(`\n${c.dim}${stat}${c.reset}`);
+  // Optional one-line summary of the themes (cheap, plays to summarizing strength).
+  try {
+    startSpinner("summarizing");
+    const sum = await llmComplete(`In ONE sentence, summarize what was worked on, given these commit subjects:\n${log}`, 120);
+    stopSpinner();
+    if (sum.trim()) console.log(`\n${c.cyan}Summary:${c.reset} ${sum.trim()}`);
+  } catch { stopSpinner(); }
+  console.log();
+}
+
 /** Deterministic offline-health check — verifies everything Rodeo needs to work
  *  well locally and prints actionable fixes. No LLM. */
 async function doctor(): Promise<void> {
@@ -10904,6 +10961,11 @@ ${c.bold}In Session:${c.reset}
     return true;
   }
 
+  if (args[0] === "scan" || args[0] === "secrets") {
+    scanSecrets();
+    return true;
+  }
+
   // Handle --new <name> for named sessions
   const newIdx = args.indexOf("--new");
   if (newIdx !== -1 && args[newIdx + 1]) {
@@ -11187,6 +11249,7 @@ async function main() {
 
   // Async one-shot commands (handleArgs is sync, so do these here)
   if (process.argv.slice(2)[0] === "doctor") { await doctor(); return; }
+  if (process.argv.slice(2)[0] === "standup" || process.argv.slice(2)[0] === "since") { await standup(process.argv.slice(3).join(" ")); return; }
 
   // Check for direct question
   const args = process.argv.slice(2);
@@ -11611,6 +11674,16 @@ ${c.dim}└${c.reset} ${c.bold}Path${c.reset}      ${c.dim}${truncate(process.cw
         case "handoff":
         case "patch":
           await handoffPlan(args.join(" "));
+          break;
+
+        case "scan":
+        case "secrets":
+          scanSecrets();
+          break;
+
+        case "standup":
+        case "since":
+          await standup(args.join(" "));
           break;
 
         case "memory":
